@@ -242,7 +242,9 @@ fun IosSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boo
             }
     ) {
         Box(
-            Modifier.padding(start = if (checked) x - (w - 27.dp) else x, top = 2.dp)
+            // 按住时滑块变宽、弹簧动画还会越过终点，算出来的左边距可能 < 0 或超出轨道。
+            // 之前用 padding（负值会抛 IllegalArgumentException → 闪退），现在用 offset 并限制在轨道内。
+            Modifier.offset(x = (if (checked) x - (w - 27.dp) else x).coerceIn(0.dp, (51.dp - w).coerceAtLeast(0.dp)), y = 2.dp)
                 .size(w, 27.dp).shadow(3.dp, CircleShape).clip(CircleShape).background(Color.White)
         )
     }

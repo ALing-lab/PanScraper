@@ -5,12 +5,13 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 enum class ThemeMode(val label: String) { SYSTEM("跟随系统"), LIGHT("浅色"), DARK("深色") }
@@ -19,7 +20,13 @@ private val Context.store by preferencesDataStore("settings")
 
 /** 非敏感设置（主题等）。敏感信息（token、TMDB 密钥）放在 SecureStore。 */
 object Settings {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // 写入按调用顺序串行执行（limitedParallelism(1) 是先进先出），连续快速切换开关时最后一次一定最后落盘；
+    // DataStore 读写出错只记日志，不让未捕获异常把进程带崩。
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO.limitedParallelism(1) +
+            CoroutineExceptionHandler { _, e -> runCatching { android.util.Log.w("Settings", "datastore: ${e.javaClass.simpleName}") } }
+    )
     private val KEY_THEME = stringPreferencesKey("theme_mode")
     private val _theme = MutableStateFlow(ThemeMode.SYSTEM)
     val theme: StateFlow<ThemeMode> = _theme
@@ -41,40 +48,30 @@ object Settings {
 
     fun init(context: Context) {
         ctx = context.applicationContext
+        // 只在启动时读一次已保存的值。之前是持续 collect：切换开关时，先落盘的「另一个开关」那次写入会再发一份旧快照，
+        // 把刚改好的内存值覆盖回去（例如关掉「简洁命名」后又自己弹回打开）。所有写入都来自本对象，内存值就是最新的。
         scope.launch {
-            ctx.store.data.map { p -> p[KEY_THEME]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM }
-                .collect { _theme.value = it }
-        }
-        scope.launch {
-            ctx.store.data.map { p -> p[KEY_TMDB_NET] }.collect { raw ->
-                val c = raw?.let { runCatching { cfgJson.decodeFromString(com.tamu.pan123.data.tmdb.TmdbNetConfig.serializer(), it) }.getOrNull() }
-                com.tamu.pan123.data.tmdb.TmdbNet.apply(c ?: com.tamu.pan123.data.tmdb.TmdbNetConfig())
-            }
-        }
-        scope.launch {
-            ctx.store.data.map { p -> p[KEY_SIMPLE_NAMING] ?: false }.collect {
-                _simpleNaming.value = it
-                com.tamu.pan123.data.naming.Naming.simpleNaming = it
-            }
-        }
-        scope.launch {
-            ctx.store.data.map { p -> p[KEY_TMDB_IN_NAME] ?: false }.collect {
-                _tmdbInName.value = it
-                com.tamu.pan123.data.naming.Naming.tmdbInFileName = it
-            }
-        }
-        scope.launch {
-            ctx.store.data.map { p -> p[KEY_DEBUG_LOG] ?: false }.collect {
-                _debugLog.value = it
-                com.tamu.pan123.data.net.NetLog.fileEnabled = it
-            }
+            val p = ctx.store.data.first()
+            p[KEY_THEME]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }?.let { _theme.value = it }
+            val raw = p[KEY_TMDB_NET]
+            val c = raw?.let { runCatching { cfgJson.decodeFromString(com.tamu.pan123.data.tmdb.TmdbNetConfig.serializer(), it) }.getOrNull() }
+            com.tamu.pan123.data.tmdb.TmdbNet.apply(c ?: com.tamu.pan123.data.tmdb.TmdbNetConfig())
+            val simple = p[KEY_SIMPLE_NAMING] ?: false
+            _simpleNaming.value = simple
+            com.tamu.pan123.data.naming.Naming.simpleNaming = simple
+            val tmdb = (p[KEY_TMDB_IN_NAME] ?: false) && simple
+            _tmdbInName.value = tmdb
+            com.tamu.pan123.data.naming.Naming.tmdbInFileName = tmdb
+            val dbg = p[KEY_DEBUG_LOG] ?: false
+            _debugLog.value = dbg
+            com.tamu.pan123.data.net.NetLog.fileEnabled = dbg
         }
     }
 
     fun setTmdbNet(c: com.tamu.pan123.data.tmdb.TmdbNetConfig) {
         val n = c.normalized()
         com.tamu.pan123.data.tmdb.TmdbNet.apply(n)
-        scope.launch { ctx.store.edit { it[KEY_TMDB_NET] = cfgJson.encodeToString(com.tamu.pan123.data.tmdb.TmdbNetConfig.serializer(), n) } }
+        if (::ctx.isInitialized) scope.launch { ctx.store.edit { it[KEY_TMDB_NET] = cfgJson.encodeToString(com.tamu.pan123.data.tmdb.TmdbNetConfig.serializer(), n) } }
     }
 
     fun setSimpleNaming(on: Boolean) {
@@ -95,11 +92,11 @@ object Settings {
         _debugLog.value = on
         com.tamu.pan123.data.net.NetLog.fileEnabled = on
         com.tamu.pan123.data.net.NetLog.line("app", if (on) "debug log enabled" else "debug log disabled")
-        scope.launch { ctx.store.edit { it[KEY_DEBUG_LOG] = on } }
+        if (::ctx.isInitialized) scope.launch { ctx.store.edit { it[KEY_DEBUG_LOG] = on } }
     }
 
     fun setTheme(mode: ThemeMode) {
         _theme.value = mode
-        scope.launch { ctx.store.edit { it[KEY_THEME] = mode.name } }
+        if (::ctx.isInitialized) scope.launch { ctx.store.edit { it[KEY_THEME] = mode.name } }
     }
 }
