@@ -48,7 +48,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    // buildConfig：测试钩子只在 BuildConfig.DEBUG 下生效（release 里 R8 会把相关分支整体删掉，见 V35-4）
+    buildFeatures { compose = true; buildConfig = true }
     testOptions { unitTests.isReturnDefaultValues = true; unitTests.isIncludeAndroidResources = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }

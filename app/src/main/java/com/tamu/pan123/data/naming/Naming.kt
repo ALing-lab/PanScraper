@@ -185,6 +185,15 @@ object Naming {
     fun cleanForSearch(name: String): String =
         AD.replace(TMDB_MARK.replace(name, " "), " ").replace(Regex("""\s+"""), " ").trim(' ', '.', '_', '-')
 
+    /**
+     * 拆出片名和年份。
+     *
+     * 启发式权衡（L9）：有多个年份样的数字时取**最后一个**作年份——
+     * 「1917.2019.mkv」「2012.2009.mkv」这类片名本身是年份数字的情况能拆对（片名 1917 / 年份 2019）；
+     * 代价是「Blade.Runner.2049.2017」之外，如果年份写在片名前（如「2019.某片」）且片名里又带年份样数字，
+     * 可能把片名里的数字当成年份。只有拆完片名不为空时才采用这个年份，否则整段当片名；
+     * 拆错时 TMDB 搜索会搜不到或可信度低，用户可以在预览里「重新匹配」手动改。
+     */
     fun parseTitleYear(head: String): Pair<String, String?> {
         var text = head.replace('_', ' ').replace('.', ' ')
         // 「盗梦空间2010」「雀骨2026」：中文标题后直接跟年份时补一个空格，便于拆出年份

@@ -1,5 +1,6 @@
 package com.tamu.pan123.data
 
+import com.tamu.pan123.BuildConfig
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
@@ -32,9 +33,13 @@ object SecureStore {
     val available: StateFlow<Boolean> = _available.asStateFlow()
     const val UNAVAILABLE_MESSAGE = "安全存储不可用，已禁止保存登录信息（本次登录只保存在内存里，退出 App 后需要重新登录）"
 
-    /** 只在 Robolectric 单元测试里为 true：测试环境没有 AndroidKeyStore，用普通 prefs 代替。真机上永远是 false。 */
-    @Volatile internal var testPlainPrefs: Boolean = android.os.Build.FINGERPRINT == "robolectric"
-    /** 测试钩子：模拟加密存储创建失败。 */
+    /**
+     * 测试钩子（V35-4）：只在 debug 构建里生效，release 构建里 [BuildConfig.DEBUG] 恒为 false，
+     * 读取处的分支会被 R8 删掉，设置了也没有任何效果。
+     * - testPlainPrefs：Robolectric 单元测试没有 AndroidKeyStore，用普通 prefs 代替（只在 debug + Robolectric 下自动打开）。
+     * - simulateKeystoreFailure：模拟加密存储创建失败。
+     */
+    @Volatile internal var testPlainPrefs: Boolean = BuildConfig.DEBUG && android.os.Build.FINGERPRINT == "robolectric"
     @Volatile internal var simulateKeystoreFailure: Boolean = false
     private val _session = MutableStateFlow(Session.EMPTY)
     val session: StateFlow<Session> = _session.asStateFlow()
@@ -70,8 +75,8 @@ object SecureStore {
         if (::prefs.isInitialized) return
         val app = context.applicationContext
         val enc: SharedPreferences? = try {
-            if (simulateKeystoreFailure) throw java.security.GeneralSecurityException("simulated")
-            if (testPlainPrefs) app.getSharedPreferences("${PREF}_test", Context.MODE_PRIVATE)
+            if (BuildConfig.DEBUG && simulateKeystoreFailure) throw java.security.GeneralSecurityException("simulated")
+            if (BuildConfig.DEBUG && testPlainPrefs) app.getSharedPreferences("${PREF}_test", Context.MODE_PRIVATE)
             else {
                 val master = MasterKey.Builder(app).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
                 EncryptedSharedPreferences.create(

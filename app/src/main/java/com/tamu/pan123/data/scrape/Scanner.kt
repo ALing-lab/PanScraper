@@ -521,8 +521,22 @@ object Scanner {
         val id: String get() = entry.fileId
         fun chain(): Sequence<Node> = generateSequence(this) { it.parent }
         /** 根目录下的直属子目录（自己在根下就是自己）。 */
-        fun holder(root: Node): Node? { if (this === root) return null; var n = this; while (n.parent !== root) n = n.parent!!; return n }
+        fun holder(root: Node): Node? = holderOf(this, root, { it.parent })
         fun pathFrom(root: Node): String = chain().takeWhile { it !== root }.toList().reversed().joinToString("/") { it.entry.fileName }
+    }
+
+    /**
+     * 节点 [node] 在 [root] 下的直属子目录（自己在根下就是自己）。
+     * 不在 [root] 这棵树里（父链走到头也没碰到 root）或 node 就是 root 时返回 null，不会越根 NPE（M10）。
+     */
+    internal fun <T : Any> holderOf(node: T, root: T, parent: (T) -> T?): T? {
+        if (node === root) return null
+        var n = node
+        while (true) {
+            val p = parent(n) ?: return null
+            if (p === root) return n
+            n = p
+        }
     }
 
     const val MAX_TREE_NODES = 80

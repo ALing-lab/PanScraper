@@ -14,13 +14,24 @@ object PlanSelection {
     fun deleteNeeds(del: PlanAction, all: List<PlanAction>): List<PlanAction> =
         if (del.op != "delete") emptyList() else all.filter { it.op == "move" && it.parentId == del.fileId && it.kind != "cleanup" }
 
-    /** move 依赖的 mkdir（同分组、同父目录、名字等于 destLabel，且 move 没有固定目标 ID）。 */
+    /**
+     * move 依赖的 mkdir（同分组、同父目录、名字等于 destLabel，且 move 没有固定目标 ID）。
+     *
+     * 不变量（L12）：返回值只会是 **mkdir 叶子**——mkdir 自己不依赖别的操作（规划器给 mkdir 的父目录总是已存在的
+     * 文件夹 ID，不会带 destRef / destLabel），所以依赖链最长一层。[FailedRetry] 和 [set] 都只取一层依赖，
+     * 就是基于这一点；以后如果允许「新建文件夹套新建文件夹」，必须把这两处改成递归。
+     */
     fun dependencyOf(move: PlanAction, all: List<PlanAction>): PlanAction? {
-        move.destRef?.let { ref -> return all.firstOrNull { it.id == ref && it.op == "mkdir" } }
-        if (move.op != "move" || move.destParentId != null) return null
-        val label = move.destLabel ?: return null
-        return all.firstOrNull { it.op == "mkdir" && it.newName == label && it.parentId == move.parentId && it.groupId == move.groupId }
-            ?: all.firstOrNull { it.op == "mkdir" && it.newName == label && it.parentId == move.parentId }
+        val dep = move.destRef?.let { ref -> all.firstOrNull { it.id == ref && it.op == "mkdir" } }
+            ?: run {
+                if (move.destRef != null || move.op != "move" || move.destParentId != null) return null
+                val label = move.destLabel ?: return null
+                all.firstOrNull { it.op == "mkdir" && it.newName == label && it.parentId == move.parentId && it.groupId == move.groupId }
+                    ?: all.firstOrNull { it.op == "mkdir" && it.newName == label && it.parentId == move.parentId }
+            }
+        // 只在 debug 构建里断言（测试会跑到）；release 里不因为一条异常数据让预览页闪退
+        if (com.tamu.pan123.BuildConfig.DEBUG) check(dep == null || (dep.op == "mkdir" && dep.destRef == null)) { "dependencyOf 只能返回无依赖的 mkdir（L12）" }
+        return dep
     }
 
     fun set(plan: ScrapePlan, ids: Collection<String>, on: Boolean): ScrapePlan {

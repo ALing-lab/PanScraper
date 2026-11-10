@@ -210,6 +210,8 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
         }
     }
     val p = plan
+    // V35-3：所有计数一次遍历算好，plan / 筛选不变时重组直接复用
+    val aggOrNull = remember(p, fst) { p?.let { PreviewFilter.aggregate(it, fst) } }
     val selectedIds = p?.let { com.tamu.pan123.data.scrape.PlanSelection.selectedIds(it) }.orEmpty()
     // 「全选」作用于当前显示的项；不筛操作时与原来一样不含可选的清理 / 删除
     val visibleExec = p?.actions?.filter {
@@ -241,20 +243,21 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
                 CircularProgressIndicator(color = c.blue, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
             } }
         } else {
+            val agg = aggOrNull ?: return@LargeTitlePage
             item(key = "status") {
                 Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                     IosSegmented(
                         PreviewFilter.Status.entries.toList(), fst.status,
-                        { "${it.label} ${PreviewFilter.statusCount(p, it)}" },
+                        { "${it.label} ${agg.statusCount(it)}" },
                         { fst = PreviewFilter.selectStatus(fst, it) },
                         Modifier.fillMaxWidth(),
                     )
                 }
             }
             item(key = "ops") {
-                OpTiles(p, fst) { fst = PreviewFilter.toggleOp(fst, it) }
+                OpTiles(agg, fst) { fst = PreviewFilter.toggleOp(fst, it) }
             }
-            PreviewFilter.chipText(p, fst)?.let { chip ->
+            agg.chipText?.let { chip ->
                 item(key = "chip") { FilterChip(chip) { fst = PreviewFilter.clear() } }
             }
             if (execMsg != null) item {
@@ -268,10 +271,9 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
                 }
             }
             // v0.3：执行成功的分组从预览里移除，只剩还没执行的
-            val shownIds = PreviewFilter.visibleGroupIds(p, fst)
+            val shownIds = agg.visibleGroupIds
             val byId = p.groups.associateBy { it.id }
-            val unfiltered = if (fst.active) PreviewFilter.visibleGroupIds(p, PreviewFilter.State()) else shownIds
-            val doneGroups = p.groups.size - unfiltered.size
+            val doneGroups = agg.doneGroupCount
             val doneActs = p.actions.count { it.done }
             if (!fst.active && (doneActs > 0 || p.stats.history > 0)) item {
                 Text(buildString {
@@ -298,7 +300,7 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
                 }) {
                     val tri = com.tamu.pan123.data.scrape.PlanSelection.groupState(p, g.id)
                     val isOpen = g.id in open
-                    GroupHeader(g, tri, isOpen, PreviewFilter.groupSummary(p, g.id, fst),
+                    GroupHeader(g, tri, isOpen, agg.groupSummary(g.id),
                         onToggle = {
                             val ids = p.actions.filter { it.groupId == g.id && com.tamu.pan123.data.scrape.PlanSelection.executable(it) && it.kind != "cleanup" }.map { it.id }
                                 .ifEmpty { p.actions.filter { it.groupId == g.id && com.tamu.pan123.data.scrape.PlanSelection.executable(it) }.map { it.id } }
@@ -364,7 +366,7 @@ internal fun CheckCircle(state: com.tamu.pan123.data.scrape.PlanSelection.Tri, e
 
 /** 下排操作格子：命名 / 新建 / 移动 / 海报 / 清理（有删除时再加删除），显示「已选/总数」；未匹配 / 跳过时变灰。 */
 @Composable
-private fun OpTiles(p: ScrapePlan, st: PreviewFilter.State, onTap: (String) -> Unit) {
+private fun OpTiles(agg: PreviewFilter.Summary, st: PreviewFilter.State, onTap: (String) -> Unit) {
     val c = Ios.colors
     val enabled = PreviewFilter.opsEnabled(st.status)
     Row(
@@ -372,9 +374,9 @@ private fun OpTiles(p: ScrapePlan, st: PreviewFilter.State, onTap: (String) -> U
             .graphicsLayer { alpha = if (enabled) 1f else 0.4f },
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        PreviewFilter.tileOps(p).forEach { (key, label) ->
+        agg.tiles.forEach { (key, label) ->
             val sel = st.op == key
-            val n = PreviewFilter.opCount(p, key)
+            val n = agg.opCount(key)
             val shape = RoundedCornerShape(16.dp)
             Column(
                 Modifier.weight(1f).heightIn(min = 64.dp).clip(shape)

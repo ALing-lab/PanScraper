@@ -1,6 +1,7 @@
 package com.tamu.pan123.data.update
 
 import com.tamu.pan123.AppInfo
+import com.tamu.pan123.BuildConfig
 import com.tamu.pan123.BuildConfigInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -42,11 +43,14 @@ sealed class UpdateResult {
  * 并提供「手动更新」（浏览器打开发布页）兜底。
  */
 object UpdateChecker {
-    /** 只给单元测试替换（MockWebServer）。 */
-    @Volatile internal var apiBase: String = "https://api.github.com"
+    private const val DEFAULT_API = "https://api.github.com"
+    /** 只给单元测试替换（MockWebServer）；release 构建里不生效，永远用 [DEFAULT_API]（V35-4）。 */
+    @Volatile internal var apiBase: String = DEFAULT_API
+    private val effectiveApiBase: String get() = if (BuildConfig.DEBUG) apiBase else DEFAULT_API
     @Volatile internal var currentVersion: String = BuildConfigInfo.VERSION
-    /** 只给单元测试用：放行 MockWebServer 的 http 地址。正式代码里永远是 null。 */
+    /** 只给单元测试用：放行 MockWebServer 的 http 地址。只在 debug 构建里生效，release 里设置了也会被忽略（V35-4）。 */
     @Volatile internal var testAllowUrl: ((okhttp3.HttpUrl) -> Boolean)? = null
+    private val testHook: ((okhttp3.HttpUrl) -> Boolean)? get() = if (BuildConfig.DEBUG) testAllowUrl else null
 
     /** GitHub 发布资源允许的下载主机（含重定向后的 CDN）。 */
     private val ASSET_HOSTS = setOf("github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
@@ -55,14 +59,14 @@ object UpdateChecker {
     /** browser_download_url 必须是 https://github.com/ALing-lab/PanScraper/releases/download/...（或 GitHub 的资源 CDN）。 */
     internal fun isTrustedAssetUrl(raw: String?): Boolean {
         val u = raw?.toHttpUrlOrNull() ?: return false
-        testAllowUrl?.let { if (it(u)) return true }
+        testHook?.let { if (it(u)) return true }
         if (!u.isHttps) return false
         val host = u.host.lowercase()
         if (host !in ASSET_HOSTS) return false
         return if (host == "github.com") u.encodedPath.startsWith(REPO_DOWNLOAD_PREFIX) else true
     }
 
-    private fun hopAllowed(u: okhttp3.HttpUrl) = testAllowUrl?.invoke(u) == true || (u.isHttps && u.host.lowercase() in ASSET_HOSTS)
+    private fun hopAllowed(u: okhttp3.HttpUrl) = testHook?.invoke(u) == true || (u.isHttps && u.host.lowercase() in ASSET_HOSTS)
 
     /** 手动跟随重定向（最多 5 次）：每一跳在连接之前都检查必须是 https + GitHub 的主机。 */
     private fun openTrusted(url: String): okhttp3.Response {
@@ -111,7 +115,7 @@ object UpdateChecker {
 
     suspend fun check(): UpdateResult = withContext(Dispatchers.IO) {
         try {
-            val req = Request.Builder().url("${apiBase.trimEnd('/')}/repos/${AppInfo.GITHUB_REPO}/releases/latest")
+            val req = Request.Builder().url("${effectiveApiBase.trimEnd('/')}/repos/${AppInfo.GITHUB_REPO}/releases/latest")
                 .header("Accept", "application/vnd.github+json")
                 .header("User-Agent", "${AppInfo.NAME_EN}/${currentVersion}")
                 .build()

@@ -3,6 +3,11 @@
   WebDAV 常用局域网 NAS 的 http 地址（如 http://192.168.1.5:5005）。Android 的网络安全配置不支持按 IP 段放行，
   所以默认允许明文（只有用户自己填 http:// 的 WebDAV 地址会用到）；
   网盘 / TMDB / GitHub 等固定的官方域名一律禁止明文，只能 https。
+
+  !!! 规则（V35-2，发版清单也有这一条）：代码里新增任何固定域名（新的 API、图床 / 镜像、DoH、统计等），
+  !!! 必须同时加进下面的 domain-config（cleartextTrafficPermitted="false"）。
+  !!! base-config 默认放行明文只是为了用户自己填的局域网 WebDAV，不是给固定域名用的。
+  单元测试 NetworkSecurityConfigTest 会扫描源码里的 https:// 固定地址，没加进来的会失败。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
@@ -20,5 +25,11 @@
         <domain includeSubdomains="true">tmdb.org</domain>
         <domain includeSubdomains="true">github.com</domain>
         <domain includeSubdomains="true">githubusercontent.com</domain>
+        <!-- TMDB 图片公共镜像（TmdbNet.PUBLIC_MIRRORS） -->
+        <domain includeSubdomains="true">amodb.dev</domain>
+        <domain includeSubdomains="true">wsrv.nl</domain>
+        <!-- DoH（TmdbNet 的 DNS-over-HTTPS） -->
+        <domain includeSubdomains="true">alidns.com</domain>
+        <domain includeSubdomains="true">doh.pub</domain>
     </domain-config>
 </network-security-config>

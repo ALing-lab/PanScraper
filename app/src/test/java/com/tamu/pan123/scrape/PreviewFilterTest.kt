@@ -146,4 +146,30 @@ class PreviewFilterTest {
         assertEquals("3 项 · 已选 3", PreviewFilter.groupSummary(plan, "movie-2", PreviewFilter.State(Status.MATCHED)))
         assertEquals("9 项 · 已选 9", PreviewFilter.groupSummary(plan, "set-3", PreviewFilter.State()))
     }
+
+    /** V35-3：一次遍历的汇总与逐项计算完全一致（所有筛选组合）。 */
+    @Test fun aggregateMatchesPerItemCountsInOnePass() {
+        val states = Status.entries.flatMap { st -> (listOf<String?>(null) + PreviewFilter.OPS.map { it.first } + "delete").map { PreviewFilter.State(st, it) } }
+        for (st in states) {
+            val agg = PreviewFilter.aggregate(plan, st)
+            for (s in Status.entries) assertEquals(plan.actions.count { !it.done && (s == Status.ALL || PreviewFilter.statusOf(it) == s) }, agg.statusCount(s))
+            for ((k, _) in PreviewFilter.OPS) {
+                val all = plan.actions.filter { PreviewFilter.opMatches(it, k) }
+                assertEquals(PreviewFilter.OpCount(all.count { com.tamu.pan123.data.scrape.PlanSelection.executable(it) && it.selected }, all.size), agg.opCount(k))
+            }
+            val n = plan.actions.count { PreviewFilter.matches(it, st) }
+            assertEquals(n, agg.matchCount)
+            if (st.active) assertTrue(agg.chipText!!.endsWith("· $n 项")) else assertNull(agg.chipText)
+            val expectVisible = (if (st.status == Status.UNMATCHED) plan.groups.sortedBy { if (it.kind == "unmatched") 0 else 1 } else plan.groups)
+                .filter { g -> if (!st.active) plan.actions.none { it.groupId == g.id } || plan.actions.any { it.groupId == g.id && !it.done }
+                               else plan.actions.any { it.groupId == g.id && PreviewFilter.matches(it, st) } }.map { it.id }
+            assertEquals(st.toString(), expectVisible, agg.visibleGroupIds)
+        }
+        val all = PreviewFilter.aggregate(plan, PreviewFilter.State())
+        assertEquals("13 项 · 已选 8", all.groupSummary("tv-1"))
+        assertEquals("1 个未匹配", all.groupSummary("unmatched-4"))
+        assertEquals("没有操作", all.groupSummary("nope"))
+        assertEquals(PreviewFilter.OPS, all.tiles)
+        assertEquals(0, all.doneGroupCount)
+    }
 }
