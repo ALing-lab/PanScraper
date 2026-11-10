@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PanScraper（深色）：渐变提亮一档，避免在黑底上发闷。一个粗圆角「匣子」（文件夹，橙→粉渐变），中间一个白色圆角播放三角 = 「装着影视的匣子」。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 文件夹后片（深一点，做出层次） -->
+    <path android:pathData="M35,34 h11.5 c1.9,0 3.6,0.9 4.7,2.4 l2.6,3.6 H73 c3.9,0 7,3.1 7,7 v4 H28 v-10 c0,-3.9 3.1,-7 7,-7 z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="28" android:startY="34" android:endX="80" android:endY="52"
+                android:startColor="#FF9A1F" android:endColor="#FF4F7E" />
+        </aapt:attr>
+    </path>
+    <!-- 文件夹前片 -->
+    <path android:pathData="M35,45 H73 c3.9,0 7,3.1 7,7 v19 c0,3.9 -3.1,7 -7,7 H35 c-3.9,0 -7,-3.1 -7,-7 V52 c0,-3.9 3.1,-7 7,-7 z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="28" android:startY="45" android:endX="80" android:endY="78"
+                android:startColor="#FFC247" android:endColor="#FF6290" />
+        </aapt:attr>
+    </path>
+    <!-- 播放三角（圆角） -->
+    <path android:fillColor="#FFFFFF" android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineJoin="round"
+        android:pathData="M49.5,53.5 L49.5,69.5 L62.5,61.5 Z" />
+</vector>

@@ -1,0 +1,81 @@
+package com.tamu.pan123.data.scrape
+
+import com.tamu.pan123.data.AppDirs
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+
+/** 预刮削计划落盘；内存里只保留当前计划的轻量引用。 */
+object PlanStore {
+    private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true; isLenient = true }
+    private val _currentPath = MutableStateFlow<String?>(null)
+    private val _summary = MutableStateFlow<PlanSummary?>(null)
+    val currentPath: StateFlow<String?> = _currentPath.asStateFlow()
+    val summary: StateFlow<PlanSummary?> = _summary.asStateFlow()
+
+    data class PlanSummary(
+        val path: String,
+        val createdAt: String,
+        val groups: Int,
+        val actions: Int,
+        val unmatched: Int,
+        val stats: PlanStats,
+    )
+
+    fun latestFile(): File? =
+        AppDirs.plans.listFiles()?.filter { it.name.startsWith("scrape_") && it.name.endsWith(".json") }
+            ?.maxByOrNull { it.lastModified() }
+
+    fun save(plan: ScrapePlan, name: String = "scrape_${System.currentTimeMillis()}.json"): File {
+        AppDirs.plans.mkdirs()
+        val file = File(AppDirs.plans, name)
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(json.encodeToString(plan))
+        tmp.renameTo(file)
+        // 另存一份 current 指针
+        File(AppDirs.plans, "current.txt").writeText(file.name)
+        _currentPath.value = file.absolutePath
+        _summary.value = PlanSummary(file.absolutePath, plan.createdAt, plan.groups.size, plan.actions.size,
+            plan.stats.unmatched, plan.stats)
+        return file
+    }
+
+    fun load(file: File = latestFile() ?: error("没有计划文件")): ScrapePlan {
+        val plan = json.decodeFromString<ScrapePlan>(file.readText())
+        _currentPath.value = file.absolutePath
+        _summary.value = PlanSummary(file.absolutePath, plan.createdAt, plan.groups.size, plan.actions.size,
+            plan.stats.unmatched, plan.stats)
+        return plan
+    }
+
+    fun loadOrNull(): ScrapePlan? = latestFile()?.let { runCatching { load(it) }.getOrNull() }
+
+    fun reset() {
+        _currentPath.value = null
+        _summary.value = null
+    }
+
+    fun update(transform: (ScrapePlan) -> ScrapePlan): ScrapePlan {
+        val file = latestFile() ?: error("没有计划文件")
+        val updated = transform(load(file))
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(json.encodeToString(updated))
+        tmp.renameTo(file)
+        _summary.value = PlanSummary(file.absolutePath, updated.createdAt, updated.groups.size, updated.actions.size,
+            updated.stats.unmatched, updated.stats)
+        return updated
+    }
+
+    fun nowLabel(): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+        sdf.timeZone = TimeZone.getTimeZone("America/Los_Angeles")
+        return sdf.format(Date()) + " PT"
+    }
+}

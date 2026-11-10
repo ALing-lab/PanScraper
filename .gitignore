@@ -1,0 +1,39 @@
+# ---- Gradle / Android Studio ----
+.gradle/
+.kotlin/
+build/
+*/build/
+captures/
+.idea/
+*.iml
+.DS_Store
+.externalNativeBuild/
+.cxx/
+
+# ---- 本机配置（SDK 路径等，不要提交）----
+local.properties
+
+# ---- 签名与密钥：绝不提交 ----
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+*.p12
+*.pem
+secrets.properties
+.env
+.env.*
+
+# ---- 构建产物 / 日志 ----
+*.apk
+*.aab
+*.ap_
+*.dex
+dist/
+logs/
+*.log
+app/src/test/out/
+webdav-e2e/
+
+# ---- 测试截图输出（README 用的截图放 docs/screenshots）----
+app/build/outputs/roborazzi/

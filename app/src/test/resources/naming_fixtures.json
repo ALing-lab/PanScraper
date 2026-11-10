@@ -1,0 +1,286 @@
+{
+  "group_cases": [
+    {
+      "stem": "X.2020.1080p.WEB-DL",
+      "expect": "T.2020.1080p"
+    },
+    {
+      "stem": "X.2020.2160p.DTS-HD",
+      "expect": "T.2020.2160p.DTS-HD"
+    },
+    {
+      "stem": "X.2020.1080p.Blu-ray",
+      "expect": "T.2020.1080p.BluRay"
+    },
+    {
+      "stem": "X.2020.1080p.BluRay.x264-SPARKS",
+      "expect": "T.2020.1080p.BluRay-SPARKS"
+    },
+    {
+      "stem": "X.2020.1080p.E-AC3",
+      "expect": "T.2020.1080p.EAC3"
+    },
+    {
+      "stem": "X.2020.WEB-DL.DDP5.1.Dolby.Atmos-FLUX",
+      "expect": "T.2020.DDP5.1.Atmos-FLUX"
+    },
+    {
+      "stem": "X.2019.2160p.DV.HDR10.RMUX.DTS-X.LPCM-ABC",
+      "expect": "T.2020.2160p.DoVi.HDR10.BluRay.REMUX.DTS-X.LPCM-ABC"
+    },
+    {
+      "stem": "X.2019.2160p.DoVi.Dolby.Vision.HDR10+.DolbyAtmos.TrueHD",
+      "expect": "T.2020.2160p.DoVi.HDR10+.Atmos.TrueHD"
+    },
+    {
+      "stem": "Cold.War.1994.2026.2160p.YK.WEB-DL.H.265.DV.HFR.HQ.DTS5.1-PandaQT",
+      "expect": "T.2020.2160p.DoVi.DTS5.1-PandaQT"
+    },
+    {
+      "stem": "Morbius.2022.2160p.WEB-DL.DV.HDR.DDP5.1",
+      "expect": "T.2020.2160p.DoVi.HDR.DDP5.1"
+    },
+    {
+      "stem": "X.2020.2160p.HDR.DoVi.HDR10",
+      "expect": "T.2020.2160p.DoVi.HDR10"
+    },
+    {
+      "stem": "X.2020.2160p.HDR",
+      "expect": "T.2020.2160p.HDR"
+    },
+    {
+      "stem": "X.2020.2160p.WEB-DL.HDRVivid.AAC",
+      "expect": "T.2020.2160p.HDRVivid.AAC"
+    },
+    {
+      "stem": "X.2020.2160p.菲影HDR.AAC",
+      "expect": "T.2020.2160p.HDRVivid.AAC"
+    },
+    {
+      "stem": "X.2020.2160p.WEB-DL.HDR-Vivid",
+      "expect": "T.2020.2160p.HDRVivid"
+    },
+    {
+      "stem": "X.2020.2160p.hdr.vivid.HDR10-GRP",
+      "expect": "T.2020.2160p.HDR10.HDRVivid-GRP"
+    }
+  ],
+  "hdr": [
+    {
+      "stem": "X.2020.2160p.HDR.DoVi.HDR10",
+      "hdr": "DoVi.HDR10"
+    },
+    {
+      "stem": "Morbius.2022.2160p.DV.HDR.DTS",
+      "hdr": "DoVi.HDR"
+    },
+    {
+      "stem": "X.2020.2160p.WEB-DL.HDR-Vivid",
+      "hdr": "HDRVivid"
+    },
+    {
+      "stem": "X.2020.2160p.HDR",
+      "hdr": "HDR"
+    },
+    {
+      "stem": "X.2020.2160p.DoVi.Dolby.Vision.HDR10+.DolbyAtmos.TrueHD",
+      "hdr": "DoVi.HDR10+"
+    },
+    {
+      "stem": "Full.River.Red.2023.2160p.60fps.WEB-DL.DoVi.HDR-Vivid.DDP5.1.Atmos-HHWEB",
+      "hdr": "DoVi.HDRVivid"
+    },
+    {
+      "stem": "X.2020.2160p.菲影HDR.AAC",
+      "hdr": "HDRVivid"
+    }
+  ],
+  "collection": "黑客帝国（系列）{tmdb-collection-2344}",
+  "folder": "盗梦空间(2010){tmdb-27205}",
+  "episode_bases": [
+    {
+      "stem": "Blossoms.Shanghai.S01E01.2160p.WEB-DL.H265.DV.60fps.DDP5.1",
+      "season": 1,
+      "episode": 1,
+      "base": "繁花.2023.S01E01.2160p.60fps.DoVi.DDP5.1",
+      "new_stem": "繁花.2023.S01E01.2160p.60fps.DoVi.DDP5.1"
+    },
+    {
+      "stem": "Blossoms.Shanghai.1x02.2160p.WEB-DL.DV.60fps.DDP5.1",
+      "season": 1,
+      "episode": 2,
+      "base": "繁花.2023.S01E02.2160p.60fps.DoVi.DDP5.1",
+      "new_stem": "繁花.2023.S01E02.2160p.60fps.DoVi.DDP5.1"
+    },
+    {
+      "stem": "Blossoms.Shanghai.EP03.2160p.WEB-DL.HDR10.DDP5.1",
+      "season": 1,
+      "episode": 3,
+      "base": "繁花.2023.S01E03.2160p.HDR10.DDP5.1",
+      "new_stem": "繁花.2023.S01E03.2160p.HDR10.DDP5.1"
+    },
+    {
+      "stem": "Blossoms.Shanghai.S01E04.2160p.WEB-DL.DV.TrueHD.Atmos",
+      "season": 1,
+      "episode": 4,
+      "base": "繁花.2023.S01E04.2160p.DoVi.TrueHD.Atmos",
+      "new_stem": "繁花.2023.S01E04.2160p.DoVi.TrueHD.Atmos"
+    },
+    {
+      "stem": "Blossoms.Shanghai.S01E05.2160p.WEB-DL.HDR.DTS-HD.MA.5.1",
+      "season": 1,
+      "episode": 5,
+      "base": "繁花.2023.S01E05.2160p.HDR.DTS-HD.MA5.1",
+      "new_stem": "繁花.2023.S01E05.2160p.HDR.DTS-HD.MA5.1"
+    },
+    {
+      "stem": "Blossoms.Shanghai.S01E06.1080p.WEB-DL.DTS",
+      "season": 1,
+      "episode": 6,
+      "base": "繁花.2023.S01E06.1080p.DTS",
+      "new_stem": "繁花.2023.S01E06.1080p.DTS"
+    },
+    {
+      "stem": "Blossoms.Shanghai.S01E07.1080p.WEB-DL.DD5.1",
+      "season": 1,
+      "episode": 7,
+      "base": "繁花.2023.S01E07.1080p.DD5.1",
+      "new_stem": "繁花.2023.S01E07.1080p.DD5.1"
+    },
+    {
+      "stem": "Blossoms.Shanghai.S01E08.1080p.WEB-DL.AAC",
+      "season": 1,
+      "episode": 8,
+      "base": "繁花.2023.S01E08.1080p.AAC",
+      "new_stem": "繁花.2023.S01E08.1080p.AAC"
+    },
+    {
+      "stem": "Blossoms.Shanghai.S01E09.2160p.WEB-DL.FLAC",
+      "season": 1,
+      "episode": 9,
+      "base": "繁花.2023.S01E09.2160p.FLAC",
+      "new_stem": "繁花.2023.S01E09.2160p.FLAC"
+    },
+    {
+      "stem": "Blossoms.Shanghai.S01E10.2160p.WEB-DL.HDR10+.DDP5.1",
+      "season": 1,
+      "episode": 10,
+      "base": "繁花.2023.S01E10.2160p.HDR10+.DDP5.1",
+      "new_stem": "繁花.2023.S01E10.2160p.HDR10+.DDP5.1"
+    },
+    {
+      "stem": "繁花.E11.4K.杜比视界.60帧.DDP5.1",
+      "season": 1,
+      "episode": 11,
+      "base": "繁花.2023.S01E11.2160p.60fps.DoVi.DDP5.1",
+      "new_stem": "繁花.2023.S01E11.2160p.60fps.DoVi.DDP5.1"
+    },
+    {
+      "stem": "Blossoms.Shanghai.S01E13.2160p.WEB-DL.HDR.Vivid.DDP5.1-HHWEB",
+      "season": 1,
+      "episode": 13,
+      "base": "繁花.2023.S01E13.2160p.HDRVivid.DDP5.1",
+      "new_stem": "繁花.2023.S01E13.2160p.HDRVivid.DDP5.1"
+    },
+    {
+      "stem": "繁花 第12集 1080p.HDR.AAC",
+      "season": 1,
+      "episode": 12,
+      "base": "繁花.2023.S01E12.1080p.HDR.AAC",
+      "new_stem": "繁花.2023.S01E12.1080p.HDR.AAC"
+    }
+  ],
+  "movie_bases": [
+    {
+      "stem": "Spider-Man.No.Way.Home.2021.2160p.WEB-DL.HDR10+.DDP5.1.Atmos",
+      "title": "蜘蛛侠：英雄无归",
+      "year": "2021",
+      "base": "蜘蛛侠：英雄无归.2021.2160p.HDR10+.DDP5.1.Atmos"
+    },
+    {
+      "stem": "Inception.2010.2160p.UHD.BluRay.REMUX.DoVi.60fps.TrueHD.Atmos-FGT",
+      "title": "盗梦空间",
+      "year": "2010",
+      "base": "盗梦空间.2010.2160p.60fps.DoVi.UHD.BluRay.REMUX.TrueHD.Atmos-FGT"
+    },
+    {
+      "stem": "Full.River.Red.2023.2160p.60fps.WEB-DL.DoVi.HDR-Vivid.DDP5.1.Atmos-HHWEB",
+      "title": "满江红",
+      "year": "2023",
+      "base": "满江红.2023.2160p.60fps.DoVi.HDRVivid.DDP5.1.Atmos-HHWEB"
+    },
+    {
+      "stem": "The.Matrix.1999.1080p.BluRay.x264",
+      "title": "黑客帝国",
+      "year": "1999",
+      "base": "黑客帝国.1999.1080p.BluRay"
+    },
+    {
+      "stem": "The.Matrix.Reloaded.2003.2160p.UHD.BluRay.REMUX.HDR10.DTS-HD.MA.7.1",
+      "title": "黑客帝国2：重装上阵",
+      "year": "2003",
+      "base": "黑客帝国2：重装上阵.2003.2160p.HDR10.UHD.BluRay.REMUX.DTS-HD.MA7.1"
+    },
+    {
+      "stem": "流浪地球2.2023.1080p.WEB-DL.H264.AAC",
+      "title": "流浪地球2",
+      "year": "2023",
+      "base": "流浪地球2.2023.1080p.AAC"
+    },
+    {
+      "stem": "流浪地球2.2023.1080p.WEBRip.x265",
+      "title": "流浪地球2",
+      "year": "2023",
+      "base": "流浪地球2.2023.1080p"
+    }
+  ],
+  "query_from_name": [
+    {
+      "stem": "Cold.War.1994.2026.2160p.YK.WEB-DL",
+      "title": "Cold War 1994",
+      "year": "2026"
+    },
+    {
+      "stem": "繁花.E11.4K.杜比视界.60帧.DDP5.1",
+      "title": "繁花",
+      "year": null
+    },
+    {
+      "stem": "Inception.2010.2160p.UHD.BluRay.REMUX.DoVi.60fps.TrueHD.Atmos-FGT",
+      "title": "Inception",
+      "year": "2010"
+    },
+    {
+      "stem": "复仇者联盟 The Avengers.2012.1080p",
+      "title": "复仇者联盟 The Avengers",
+      "year": "2012"
+    }
+  ],
+  "season_dir": [
+    {
+      "name": "Season 1",
+      "is_season": true,
+      "num": 1
+    },
+    {
+      "name": "S02",
+      "is_season": true,
+      "num": 2
+    },
+    {
+      "name": "第3季",
+      "is_season": true,
+      "num": 3
+    },
+    {
+      "name": "Specials",
+      "is_season": true,
+      "num": 0
+    },
+    {
+      "name": "Extras",
+      "is_season": false,
+      "num": null
+    }
+  ]
+}

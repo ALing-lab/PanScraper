@@ -1,0 +1,97 @@
+package com.tamu.pan123.data.scrape
+
+/**
+ * 预览页的勾选逻辑（纯函数，便于测试）。
+ * - 只有可执行的操作（改名 / 新建 / 移动 / 海报）可以勾选
+ * - 勾选「移动」会自动勾上它依赖的「新建文件夹」；取消「新建文件夹」会同时取消依赖它的「移动」
+ */
+object PlanSelection {
+    val EXEC_OPS = setOf("rename", "mkdir", "move", "artwork", "delete")
+
+    fun executable(a: PlanAction) = a.op in EXEC_OPS && !a.done && a.blocked == null
+
+    /** 删除多余文件夹前必须先完成的移动（把视频 / 字幕从这个文件夹移走）。 */
+    fun deleteNeeds(del: PlanAction, all: List<PlanAction>): List<PlanAction> =
+        if (del.op != "delete") emptyList() else all.filter { it.op == "move" && it.parentId == del.fileId && it.kind != "cleanup" }
+
+    /** move 依赖的 mkdir（同分组、同父目录、名字等于 destLabel，且 move 没有固定目标 ID）。 */
+    fun dependencyOf(move: PlanAction, all: List<PlanAction>): PlanAction? {
+        move.destRef?.let { ref -> return all.firstOrNull { it.id == ref && it.op == "mkdir" } }
+        if (move.op != "move" || move.destParentId != null) return null
+        val label = move.destLabel ?: return null
+        return all.firstOrNull { it.op == "mkdir" && it.newName == label && it.parentId == move.parentId && it.groupId == move.groupId }
+            ?: all.firstOrNull { it.op == "mkdir" && it.newName == label && it.parentId == move.parentId }
+    }
+
+    fun set(plan: ScrapePlan, ids: Collection<String>, on: Boolean): ScrapePlan {
+        val target = ids.toMutableSet()
+        val byId = plan.actions.associateBy { it.id }
+        if (on) {
+            for (id in ids) {
+                val a = byId[id] ?: continue
+                dependencyOf(a, plan.actions)?.let { target += it.id }
+                for (m in deleteNeeds(a, plan.actions)) {
+                    target += m.id
+                    dependencyOf(m, plan.actions)?.let { target += it.id }
+                }
+            }
+        } else {
+            val mkdirs = ids.mapNotNull { byId[it] }.filter { it.op == "mkdir" }
+            if (mkdirs.isNotEmpty()) plan.actions.filter { it.op == "move" }.forEach { m ->
+                val dep = dependencyOf(m, plan.actions)
+                if (dep != null && mkdirs.any { it.id == dep.id }) target += m.id
+            }
+            if (mkdirs.isNotEmpty()) plan.actions.filter { it.op == "artwork" && it.destRef != null }.forEach { a ->
+                if (mkdirs.any { it.id == a.destRef }) target += a.id
+            }
+            // 取消移动 → 依赖这些移动的删除也取消（否则文件夹里还有视频，不会删除）
+            val moves = ids.mapNotNull { byId[it] }.filter { it.op == "move" }
+            if (moves.isNotEmpty()) plan.actions.filter { it.op == "delete" }.forEach { d ->
+                if (deleteNeeds(d, plan.actions).any { m -> moves.any { it.id == m.id } }) target += d.id
+            }
+        }
+        return plan.copy(actions = plan.actions.map {
+            if (it.id in target && executable(it)) it.copy(selected = on) else it
+        })
+    }
+
+    fun setAll(plan: ScrapePlan, on: Boolean, filter: (PlanAction) -> Boolean = { true }): ScrapePlan =
+        set(plan, plan.actions.filter { executable(it) && filter(it) }.map { it.id }, on)
+
+    /** 分组勾选状态：全选 / 部分 / 未选 / 无可执行项。 */
+    enum class Tri { ALL, SOME, NONE, EMPTY }
+
+    fun groupState(plan: ScrapePlan, groupId: String): Tri {
+        val acts = plan.actions.filter { it.groupId == groupId && executable(it) }
+        if (acts.isEmpty()) return Tri.EMPTY
+        val n = acts.count { it.selected }
+        return when (n) { 0 -> Tri.NONE; acts.size -> Tri.ALL; else -> Tri.SOME }
+    }
+
+    /** 要执行的 ID（按计划顺序，已补齐依赖）。 */
+    fun selectedIds(plan: ScrapePlan): List<String> {
+        val sel = plan.actions.filter { executable(it) && it.selected }.map { it.id }.toMutableSet()
+        plan.actions.filter { it.id in sel }.forEach { a ->
+            dependencyOf(a, plan.actions)?.takeIf { executable(it) }?.let { sel += it.id }
+            deleteNeeds(a, plan.actions).filter { executable(it) }.forEach { m ->
+                sel += m.id
+                dependencyOf(m, plan.actions)?.takeIf { executable(it) }?.let { sel += it.id }
+            }
+        }
+        return plan.actions.filter { it.id in sel }.map { it.id }
+    }
+
+    fun summary(plan: ScrapePlan, ids: List<String>): String {
+        val set = ids.toSet()
+        val a = plan.actions.filter { it.id in set }
+        val parts = listOf(
+            "改名" to a.count { it.op == "rename" },
+            "新建文件夹" to a.count { it.op == "mkdir" && it.kind != "cleanup" },
+            "移动" to a.count { it.op == "move" && it.kind != "cleanup" },
+            "海报/NFO" to a.count { it.op == "artwork" },
+            "清理旧文件" to a.count { it.kind == "cleanup" && it.op == "move" },
+            "删除多余文件夹" to a.count { it.op == "delete" },
+        ).filter { it.second > 0 }
+        return parts.joinToString(" · ") { "${it.first} ${it.second}" }
+    }
+}
