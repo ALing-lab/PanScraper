@@ -102,7 +102,7 @@ object TmdbNet {
     /** 只对 TMDB 相关域名走 DoH；全部失败时回落系统 DNS。 */
     private val tmdbDns = object : Dns {
         override fun lookup(hostname: String): List<InetAddress> {
-            val tmdbHost = hostname.endsWith("themoviedb.org") || hostname.endsWith("tmdb.org")
+            val tmdbHost = com.tamu.pan123.data.net.HostMatch.matchesAny(hostname, listOf("themoviedb.org", "tmdb.org"))
             if (tmdbHost) for (d in dohChain) {
                 val r = runCatching { d.lookup(hostname) }.getOrNull()
                 if (!r.isNullOrEmpty()) {

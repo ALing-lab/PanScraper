@@ -43,6 +43,7 @@ data class SignInData(
     @SerialName("Token") val tokenAlt: String? = null,
 ) {
     fun tokenOrNull(): String? = token ?: tokenAlt
+    override fun toString() = "SignInData(token=${if (tokenOrNull().isNullOrBlank()) "null" else "***"})"
 }
 
 /** 面包屑节点。 */

@@ -55,7 +55,10 @@ data class GyCreds(
     /** 设备 ID：优先取网页的 swangpan_web_device_id，没有则随机 32 位十六进制。 */
     val deviceId: String = "",
     val sub: String = "",
-)
+) {
+    /** 不在日志 / 崩溃报告里泄露令牌。 */
+    override fun toString() = "GyCreds(accessToken=***, refreshToken=${if (refreshToken.isBlank()) "" else "***"}, expiresAt=$expiresAt, sub=$sub)"
+}
 
 /** 凭据读写；默认存账号密钥，测试可注入内存实现。 */
 interface GyTokenStore {
@@ -481,6 +484,8 @@ class GuangyaDrive(
         const val ACCOUNT_BASE = "https://account.guangyapan.com"
         const val CLIENT_ID = "aMe-8VSlkrbQXpUR"
         const val WEB_URL = "https://www.guangyapan.com/"
+        /** 登录验证时列的目录（根目录）。 */
+        const val ROOT_ID_FOR_VALIDATE = ""
         const val CRED_KEY_PREFIX = "credentials_$CLIENT_ID"
         const val DEVICE_KEY = "swangpan_web_device_id"
         const val PAGE_SIZE = 100

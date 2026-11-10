@@ -25,7 +25,8 @@ object CrashReporter {
 
     fun write(dir: File, t: Thread, e: Throwable): File {
         dir.mkdirs()
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        // 文件名带毫秒，同一秒内多次崩溃也不会互相覆盖
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())
         val sw = StringWriter()
         e.printStackTrace(PrintWriter(sw))
         val text = buildString {
@@ -39,7 +40,7 @@ object CrashReporter {
             append(sw.toString())
         }
         val f = File(dir, "crash-$stamp.txt")
-        f.writeText(NetLog.sanitize(text))
+        com.tamu.pan123.data.io.AtomicFiles.writeText(f, NetLog.sanitize(text))
         dir.listFiles { x -> x.name.startsWith("crash-") }?.sortedByDescending { it.name }?.drop(KEEP)?.forEach { it.delete() }
         return f
     }

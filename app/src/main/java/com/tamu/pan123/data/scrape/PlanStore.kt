@@ -33,26 +33,27 @@ object PlanStore {
         AppDirs.plans.listFiles()?.filter { it.name.startsWith("scrape_") && it.name.endsWith(".json") }
             ?.maxByOrNull { it.lastModified() }
 
-    fun save(plan: ScrapePlan, name: String = "scrape_${System.currentTimeMillis()}.json"): File {
+    /** 同一时间只允许一个读改写（执行引擎标记完成 + 预览勾选可能同时发生，避免互相覆盖）。 */
+    private val lock = Any()
+
+    fun save(plan: ScrapePlan, name: String = "scrape_${System.currentTimeMillis()}.json"): File = synchronized(lock) {
         AppDirs.plans.mkdirs()
         val file = File(AppDirs.plans, name)
-        val tmp = File(file.path + ".tmp")
-        tmp.writeText(json.encodeToString(plan))
-        tmp.renameTo(file)
-        // 另存一份 current 指针
-        File(AppDirs.plans, "current.txt").writeText(file.name)
+        com.tamu.pan123.data.io.AtomicFiles.writeText(file, json.encodeToString(plan))
+        // 另存一份 current 指针（原子写）
+        com.tamu.pan123.data.io.AtomicFiles.writeText(File(AppDirs.plans, "current.txt"), file.name)
         _currentPath.value = file.absolutePath
         _summary.value = PlanSummary(file.absolutePath, plan.createdAt, plan.groups.size, plan.actions.size,
             plan.stats.unmatched, plan.stats)
-        return file
+        file
     }
 
-    fun load(file: File = latestFile() ?: error("没有计划文件")): ScrapePlan {
+    fun load(file: File = latestFile() ?: error("没有计划文件")): ScrapePlan = synchronized(lock) {
         val plan = json.decodeFromString<ScrapePlan>(file.readText())
         _currentPath.value = file.absolutePath
         _summary.value = PlanSummary(file.absolutePath, plan.createdAt, plan.groups.size, plan.actions.size,
             plan.stats.unmatched, plan.stats)
-        return plan
+        plan
     }
 
     fun loadOrNull(): ScrapePlan? = latestFile()?.let { runCatching { load(it) }.getOrNull() }
@@ -62,15 +63,13 @@ object PlanStore {
         _summary.value = null
     }
 
-    fun update(transform: (ScrapePlan) -> ScrapePlan): ScrapePlan {
+    fun update(transform: (ScrapePlan) -> ScrapePlan): ScrapePlan = synchronized(lock) {
         val file = latestFile() ?: error("没有计划文件")
         val updated = transform(load(file))
-        val tmp = File(file.path + ".tmp")
-        tmp.writeText(json.encodeToString(updated))
-        tmp.renameTo(file)
+        com.tamu.pan123.data.io.AtomicFiles.writeText(file, json.encodeToString(updated))
         _summary.value = PlanSummary(file.absolutePath, updated.createdAt, updated.groups.size, updated.actions.size,
             updated.stats.unmatched, updated.stats)
-        return updated
+        updated
     }
 
     fun nowLabel(): String {

@@ -300,6 +300,8 @@ fun UpdateCard(result: UpdateResult, onDismiss: () -> Unit, onManual: () -> Unit
                 job = scope.launch {
                     runCatching {
                         val f = UpdateChecker.download(result.release, java.io.File(ctx.cacheDir, "updates")) { progress = it }
+                        UpdateChecker.verifyBeforeInstall(ctx, f)
+                        UpdateChecker.verifyBeforeInstall(ctx, f)
                         progress = 1f
                         installApk(ctx, f)
                     }.onFailure { e -> if (e !is kotlinx.coroutines.CancellationException) { err = e.message ?: "下载失败"; progress = null } }

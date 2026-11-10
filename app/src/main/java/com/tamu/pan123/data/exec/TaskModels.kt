@@ -27,6 +27,8 @@ data class TaskRun(
     val items: List<TaskItem> = emptyList(),
     /** 当前阶段 1..4（0 = 未开始 / 已结束）。 */
     val phase: Int = 0,
+    /** 用户点过「结束」。进程被系统杀掉、服务被重新拉起时，这样的任务不会自动恢复。 */
+    val userStopped: Boolean = false,
 ) {
     companion object {
         const val STATUS_IDLE = "idle"

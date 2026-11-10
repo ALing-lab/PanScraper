@@ -191,6 +191,8 @@ fun WebDavFormScreen(nav: NavHostController) {
     var pass by remember { mutableStateOf("") }
     var label by remember { mutableStateOf("") }
     var insecure by remember { mutableStateOf(false) }
+    var pin by remember { mutableStateOf<String?>(null) }
+    var askPin by remember { mutableStateOf<com.tamu.pan123.data.webdav.UntrustedCertException?>(null) }
     var testMsg by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -213,7 +215,10 @@ fun WebDavFormScreen(nav: NavHostController) {
                 val acct = AccountStore.add(
                     ProviderKind.WEBDAV,
                     label.ifBlank { "WebDAV · $host" },
-                    extra = mapOf("url" to url.trim().trimEnd('/'), "user" to user.trim(), "insecure" to if (insecure) "1" else "0"),
+                    extra = buildMap {
+                        put("url", url.trim().trimEnd('/')); put("user", user.trim()); put("insecure", if (insecure) "1" else "0")
+                        if (insecure) pin?.let { put("pin", it) }
+                    },
                     secret = org.json.JSONObject().put("password", pass).toString(),
                 )
                 nav.popBackStack("settings/account", inclusive = false)
@@ -263,13 +268,14 @@ fun WebDavFormScreen(nav: NavHostController) {
             }
         }
         item {
-            GroupedSection(footer = "仅在 NAS 使用自签名 HTTPS 证书时打开；只对这个账号生效。") {
+            GroupedSection(footer = "仅在 NAS 使用自签名 HTTPS 证书时打开；只对这个账号生效。打开后点「测试连接」，核对并确认证书指纹，之后只信任这一张证书。" +
+                (if (insecure && pin != null) "\n已信任证书：SHA-256 ${pin!!.take(23)}…" else "")) {
                 IosRow(
                     "信任自签名证书",
                     icon = Icons.Rounded.GppMaybe,
                     iconTint = c.orange,
                     showDivider = false,
-                    trailing = { IosSwitch(insecure, { insecure = it }) },
+                    trailing = { IosSwitch(insecure, { insecure = it; if (!it) pin = null }) },
                 )
             }
         }
@@ -285,14 +291,37 @@ fun WebDavFormScreen(nav: NavHostController) {
                     if (!valid || testing) return@IosRow
                     testing = true; testMsg = null
                     scope.launch {
-                        val r = com.tamu.pan123.data.webdav.WebDavDrive("test", url.trim(), user.trim(), pass, insecure).check()
-                        testMsg = r.fold({ "连接成功，根目录有 $it 项。" }, { "连接失败：${it.message}" })
+                        val r = com.tamu.pan123.data.webdav.WebDavDrive("test", url.trim(), user.trim(), pass, insecure, pin).check()
+                        val untrusted = r.exceptionOrNull() as? com.tamu.pan123.data.webdav.UntrustedCertException
+                        if (untrusted != null && insecure) { askPin = untrusted; testMsg = "需要确认服务器证书" }
+                        else testMsg = r.fold({ "连接成功，根目录有 $it 项。" }, { "连接失败：${it.message}" + webDavPlainHint(url) })
                         testing = false
                     }
                 }
             }
         }
     }
+    askPin?.let { e ->
+        CertTrustAlert(e, onTrust = { pin = e.fingerprint; askPin = null; testMsg = "已信任这张证书，请再点一次「测试连接」。" }, onDismiss = { askPin = null })
+    }
+}
+
+/** http:// 地址提醒：明文传输。 */
+internal fun webDavPlainHint(url: String) =
+    if (url.trim().startsWith("http://", true)) "\n（http:// 是明文传输，只建议在家里的局域网使用）" else ""
+
+/** 首次连接自签名证书：展示 SHA-256 指纹，请用户核对后信任。 */
+@Composable
+internal fun CertTrustAlert(e: com.tamu.pan123.data.webdav.UntrustedCertException, onTrust: () -> Unit, onDismiss: () -> Unit) {
+    com.tamu.pan123.ui.components.IosAlert(
+        title = "信任这张证书？",
+        message = "服务器使用的证书不受系统信任。请在 NAS 的证书设置里核对 SHA-256 指纹是否一致：\n\n${e.fingerprint}\n\n" +
+            (if (e.subject.isNotBlank()) "证书主体：${e.subject}\n\n" else "") +
+            "信任后只接受这一张证书；以后证书变了会拒绝连接并再次询问。",
+        confirm = "信任",
+        onConfirm = onTrust,
+        onDismiss = onDismiss,
+    )
 }
 
 /** 单个账号详情：状态、重新登录、设为当前、删除。 */
@@ -355,8 +384,21 @@ fun DriveAccountScreen(nav: NavHostController, id: String) {
             item(key = "davtest") {
                 var msg by remember { mutableStateOf<String?>(null) }
                 var busy by remember { mutableStateOf(false) }
+                var askPin by remember { mutableStateOf<com.tamu.pan123.data.webdav.UntrustedCertException?>(null) }
                 val scope = rememberCoroutineScope()
-                GroupedSection(header = "WebDAV", footer = msg ?: if (acct.extra["insecure"] == "1") "已信任自签名证书。" else null) {
+                val pinned = acct.extra["pin"]
+                val footer = msg ?: when {
+                    acct.extra["insecure"] == "1" && pinned != null -> "已信任自签名证书：SHA-256 ${pinned.take(23)}…"
+                    acct.extra["insecure"] == "1" -> "已打开「信任自签名证书」，但还没有确认证书指纹：请点「测试连接」核对后信任。"
+                    else -> null
+                }
+                askPin?.let { e ->
+                    CertTrustAlert(e, onTrust = {
+                        AccountStore.update(acct.copy(extra = acct.extra + ("pin" to e.fingerprint)))
+                        askPin = null; msg = "已信任这张证书，请再点一次「测试连接」。"
+                    }, onDismiss = { askPin = null })
+                }
+                GroupedSection(header = "WebDAV", footer = footer) {
                     IosRow(
                         if (busy) "正在连接…" else "测试连接",
                         icon = Icons.Rounded.NetworkCheck,
@@ -368,7 +410,9 @@ fun DriveAccountScreen(nav: NavHostController, id: String) {
                         busy = true; msg = null
                         scope.launch {
                             val r = com.tamu.pan123.data.webdav.WebDavDrive.from(acct).check()
-                            msg = r.fold({ "连接成功，根目录有 $it 项。" }, { "连接失败：${it.message}" })
+                            val untrusted = r.exceptionOrNull() as? com.tamu.pan123.data.webdav.UntrustedCertException
+                            if (untrusted != null && acct.extra["insecure"] == "1") { askPin = untrusted; msg = "需要确认服务器证书" }
+                            else msg = r.fold({ "连接成功，根目录有 $it 项。" }, { "连接失败：${it.message}" + webDavPlainHint(acct.extra["url"].orEmpty()) })
                             busy = false
                         }
                     }

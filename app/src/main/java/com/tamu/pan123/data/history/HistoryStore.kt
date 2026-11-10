@@ -88,9 +88,7 @@ object HistoryStore {
         if (save) file()?.let { f ->
             runCatching {
                 f.parentFile?.mkdirs()
-                val tmp = File(f.path + ".tmp")
-                tmp.writeText(json.encodeToString(HistoryFile.serializer(), sorted))
-                tmp.renameTo(f)
+                com.tamu.pan123.data.io.AtomicFiles.writeText(f, json.encodeToString(HistoryFile.serializer(), sorted))
             }
         }
     }

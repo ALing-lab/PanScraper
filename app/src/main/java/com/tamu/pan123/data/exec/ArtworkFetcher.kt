@@ -154,16 +154,35 @@ object ArtworkFetcher {
         AppDirs.imgCache.mkdirs()
         val hash = MessageDigest.getInstance("SHA-1").digest(url.toByteArray())
             .joinToString("") { "%02x".format(it) }
-        val ext = url.substringAfterLast('.', "jpg").substringBefore('?').take(4).ifBlank { "jpg" }
+        val ext = ImageBytes.safeExt(url)
         val cp = File(AppDirs.imgCache, "$hash.$ext")
-        if (cp.isFile) return cp.readBytes()
+        if (cp.isFile && cp.length() in 1..ImageBytes.MAX_BYTES) {
+            val cached = cp.readBytes()
+            if (ImageBytes.looksLikeImage(cached)) return cached
+        }
+        cp.delete() // 坏的 / 过大的缓存重新下载
         val req = Request.Builder().url(com.tamu.pan123.data.tmdb.TmdbNet.imageUrl(url))
             .header("User-Agent", "123pan-tmdb-android/0.2")
             .get().build()
         com.tamu.pan123.data.tmdb.TmdbNet.client().newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) error("下载图片 HTTP ${resp.code}")
-            val bytes = resp.body?.bytes() ?: error("空图片")
-            cp.writeBytes(bytes)
+            val body = resp.body ?: error("空图片")
+            if (body.contentLength() > ImageBytes.MAX_BYTES) error("图片太大（超过 15 MB），已跳过")
+            val bytes = body.byteStream().use { ins ->
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(32 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = ins.read(buf); if (n < 0) break
+                    total += n
+                    if (total > ImageBytes.MAX_BYTES) error("图片太大（超过 15 MB），已跳过")
+                    out.write(buf, 0, n)
+                }
+                out.toByteArray()
+            }
+            if (!ImageBytes.looksLikeImage(bytes)) error("下载到的不是图片（可能被网络劫持），已跳过")
+            // 先写临时文件再改名，避免留下半截缓存
+            runCatching { com.tamu.pan123.data.io.AtomicFiles.writeBytes(cp, bytes) }
             return bytes
         }
     }
@@ -183,7 +202,7 @@ object ArtworkFetcher {
         }
         jsonStr(ext, "imdb_id")?.let {
             L += tag("imdbid", it)
-            L += """  <uniqueid type="imdb" default="true">$it</uniqueid>"""
+            L += """  <uniqueid type="imdb" default="true">${esc(it)}</uniqueid>"""
         }
         val plot = flat(d.overview)
         L += cdata("plot", plot)
@@ -208,7 +227,7 @@ object ArtworkFetcher {
             if (a.optString("character").isNotBlank()) L += "    <role>${esc(a.optString("character"))}</role>"
             L += "    <tmdbid>${a.optInt("id")}</tmdbid>"
             if (!a.isNull("profile_path")) {
-                L += "    <thumb>https://image.tmdb.org/t/p/original${a.optString("profile_path")}</thumb>"
+                L += "    <thumb>${esc("https://image.tmdb.org/t/p/original" + a.optString("profile_path"))}</thumb>"
             }
             L += "    <profile>https://www.themoviedb.org/person/${a.optInt("id")}</profile>"
             L += "  </actor>"
@@ -242,8 +261,9 @@ object ArtworkFetcher {
         if (tid != null) {
             val text = TmdbClient.get("/tv/$tid/season/$snum", mapOf("language" to "zh-CN"))
             if (text != null) {
-                jsonStr(text, "name")?.let { title = unescapeJson(it) }
-                jsonStr(text, "overview")?.let { plot = flat(unescapeJson(it)) }
+                // JSONObject.optString 已经处理了 JSON 转义，不能再手动反转义一次
+                jsonStr(text, "name")?.let { title = it }
+                jsonStr(text, "overview")?.let { plot = flat(it) }
                 jsonStr(text, "air_date")?.let { premiered = it }
             }
         }
@@ -260,10 +280,10 @@ object ArtworkFetcher {
         return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<season>\n" + L.joinToString("\n") + "\n</season>\n"
     }
 
-    private fun flat(text: String?) = (text ?: "").replace(Regex("""\s*[\r\n]+\s*"""), "").trim()
-    private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    private fun tag(name: String, value: Any) = "  <$name>${esc(value.toString())}</$name>"
-    private fun cdata(name: String, value: String) = "  <$name><![CDATA[$value]]></$name>"
+    private fun flat(text: String?) = NfoXml.flat(text)
+    private fun esc(s: String) = NfoXml.esc(s)
+    private fun tag(name: String, value: Any) = NfoXml.tag(name, value)
+    private fun cdata(name: String, value: String) = NfoXml.cdata(name, value)
     private fun jsonStr(text: String?, key: String): String? {
         if (text.isNullOrBlank()) return null
         val o = runCatching { JSONObject(text) }.getOrNull() ?: return null
@@ -276,7 +296,6 @@ object ArtworkFetcher {
         if (o.isNull(key)) return null
         return o.optLong(key).takeIf { it != 0L }
     }
-    private fun unescapeJson(s: String) = s.replace("\\n", "\n").replace("\\\"", "\"").replace("\\\\", "\\")
 }
 
 /** movie.nfo（Kodi / Jellyfin / Emby 通用字段）。纯函数，便于测试。 */
@@ -332,14 +351,14 @@ object MovieNfo {
             L += "    <name>${esc(a.optString("name"))}</name>"
             if (a.optString("character").isNotBlank()) L += "    <role>${esc(a.optString("character"))}</role>"
             L += "    <order>$i</order>"
-            if (!a.isNull("profile_path")) L += "    <thumb>https://image.tmdb.org/t/p/original${a.optString("profile_path")}</thumb>"
+            if (!a.isNull("profile_path")) L += "    <thumb>${esc("https://image.tmdb.org/t/p/original" + a.optString("profile_path"))}</thumb>"
             L += "  </actor>"
         }
         return "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n<movie>\n" + L.joinToString("\n") + "\n</movie>\n"
     }
 
-    private fun flat(text: String?) = (text ?: "").replace(Regex("""\s*[\r\n]+\s*"""), "").trim()
-    private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    private fun tag(name: String, value: Any) = "  <$name>${esc(value.toString())}</$name>"
-    private fun cdata(name: String, value: String) = "  <$name><![CDATA[${value.replace("]]>", "]]&gt;")}]]></$name>"
+    private fun flat(text: String?) = NfoXml.flat(text)
+    private fun esc(s: String) = NfoXml.esc(s)
+    private fun tag(name: String, value: Any) = NfoXml.tag(name, value)
+    private fun cdata(name: String, value: String) = NfoXml.cdata(name, value)
 }

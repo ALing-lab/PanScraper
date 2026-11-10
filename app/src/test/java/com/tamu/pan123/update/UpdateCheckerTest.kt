@@ -20,9 +20,9 @@ class UpdateCheckerTest {
     @After fun down() { srv.shutdown(); UpdateChecker.apiBase = oldBase; UpdateChecker.currentVersion = oldVer }
 
     private fun release(tag: String) = """{"tag_name":"$tag","name":"PanScraper $tag","body":"- 新功能","html_url":"https://github.com/ALing-lab/PanScraper/releases/tag/$tag",
-        "assets":[{"name":"checksums.txt","browser_download_url":"https://x/sum","size":10,"state":"uploaded"},
-                  {"name":"old-v0.1.apk","browser_download_url":"https://x/old.apk","size":5,"state":"uploaded"},
-                  {"name":"PanScraper-${tag}.apk","browser_download_url":"https://x/new.apk","size":23527238,"state":"uploaded"}]}"""
+        "assets":[{"name":"checksums.txt","browser_download_url":"https://github.com/ALing-lab/PanScraper/releases/download/$tag/checksums.txt","size":10,"state":"uploaded"},
+                  {"name":"old-v0.1.apk","browser_download_url":"https://github.com/ALing-lab/PanScraper/releases/download/v0.1/old-v0.1.apk","size":5,"state":"uploaded"},
+                  {"name":"PanScraper-${tag}.apk","browser_download_url":"https://github.com/ALing-lab/PanScraper/releases/download/$tag/PanScraper-${tag}.apk","size":23527238,"state":"uploaded"}]}"""
 
     @Test fun repoConstants() {
         assertEquals("ALing-lab/PanScraper", AppInfo.GITHUB_REPO)
@@ -40,7 +40,7 @@ class UpdateCheckerTest {
         val rel = (r as UpdateResult.Available).release
         assertEquals("0.3.10", rel.version)
         assertEquals("PanScraper-v0.3.10.apk", rel.apkName)
-        assertEquals("https://x/new.apk", rel.apkUrl)
+        assertEquals("https://github.com/ALing-lab/PanScraper/releases/download/v0.3.10/PanScraper-v0.3.10.apk", rel.apkUrl)
         assertEquals(23527238L, rel.apkSize)
     }
 

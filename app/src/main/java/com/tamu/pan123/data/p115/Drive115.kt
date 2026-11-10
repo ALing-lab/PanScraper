@@ -41,7 +41,10 @@ data class P115Creds(
     val userId: Long = 0,
     /** 上传用 userkey；可懒加载。 */
     val userKey: String = "",
-)
+) {
+    /** 不在日志 / 崩溃报告里泄露 cookie。 */
+    override fun toString() = "P115Creds(uid=${if (uid.isBlank()) "" else "***"}, userId=$userId, userName=$userName)"
+}
 
 interface P115TokenStore {
     fun load(): P115Creds?
@@ -366,7 +369,9 @@ class Drive115(
         val signCheck: String = "",
     )
 
-    data class OssToken(val ak: String, val sk: String, val token: String, val expiration: String = "")
+    data class OssToken(val ak: String, val sk: String, val token: String, val expiration: String = "") {
+        override fun toString() = "OssToken(ak=***, sk=***, token=***, expiration=$expiration)"
+    }
 
     private fun digest(data: ByteArray): Digest {
         val sha1 = MessageDigest.getInstance("SHA-1")
@@ -387,9 +392,10 @@ class Drive115(
         val o = requireOk(200, text, "uploadinfo")
         checkState(o)
         cachedUserId = o.optLong("user_id").takeIf { it != 0L } ?: c.userId
-        cachedUserKey = o.optString("userkey")
-        if (cachedUserKey.isNullOrBlank()) throw P115ApiException(-1, "115 上传信息缺少 userkey，可能账号未开通上传权限")
-        store.save(c.copy(userId = cachedUserId, userKey = cachedUserKey!!))
+        val key = o.optString("userkey")
+        if (key.isNullOrBlank()) throw P115ApiException(-1, "115 上传信息缺少 userkey，可能账号未开通上传权限")
+        cachedUserKey = key
+        store.save(c.copy(userId = cachedUserId, userKey = key))
     }
 
     private fun signature(fileId: String, target: String): String {

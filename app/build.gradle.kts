@@ -1,3 +1,6 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -16,10 +19,28 @@ android {
         versionCode = 15
         versionName = "0.3.4"
     }
+    // 正式签名：从仓库外的 keystore.properties 读取（默认 /workspace/signing/keystore.properties，
+    // 也可用环境变量 PANSCRAPER_SIGNING_PROPS 指定）。文件不存在时 release 不签名，开源构建照常能编译。
+    val signingProps = File(System.getenv("PANSCRAPER_SIGNING_PROPS") ?: "/workspace/signing/keystore.properties")
+    val releaseSigning = if (signingProps.isFile) {
+        val p = Properties().apply { signingProps.inputStream().use { load(it) } }
+        signingConfigs.create("release") {
+            storeFile = file(p.getProperty("storeFile"))
+            storePassword = p.getProperty("storePassword")
+            keyAlias = p.getProperty("keyAlias")
+            keyPassword = p.getProperty("keyPassword")
+            enableV1Signing = false
+            enableV2Signing = true
+            enableV3Signing = true
+        }
+    } else null
     buildTypes {
         release {
-            isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = releaseSigning
         }
     }
     compileOptions {

@@ -52,10 +52,30 @@ class Ec115Cipher private constructor(
             init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
         }
         val lz4Block = aes.doFinal(aligned)
+        if (lz4Block.size < 2) throw java.io.IOException("115 返回的数据太短，无法解密")
         val length = (lz4Block[0].toInt() and 0xff) + ((lz4Block[1].toInt() and 0xff) shl 8)
-        val dest = ByteArray(0x2000)
-        val n = LZ4Factory.fastestInstance().safeDecompressor().decompress(lz4Block, 2, length, dest, 0)
-        return dest.copyOf(n)
+        if (length > lz4Block.size - 2) throw java.io.IOException("115 返回的数据长度不对，无法解密")
+        return lz4Decompress(lz4Block, 2, length)
+    }
+
+    /**
+     * LZ4 块解压：输出大小事先不知道。从压缩数据的 4 倍（至少 8 KB）开始，放不下就翻倍，
+     * 上限是 LZ4 理论最大压缩比（255 倍）和 [MAX_PLAIN] 中较小的那个，超出就报错，不会截断数据。
+     */
+    internal fun lz4Decompress(src: ByteArray, off: Int, len: Int): ByteArray {
+        val d = LZ4Factory.fastestInstance().safeDecompressor()
+        val limit = minOf(MAX_PLAIN.toLong(), len.toLong() * 255 + 16).toInt()
+        var size = minOf(limit, maxOf(0x2000, len * 4))
+        while (true) {
+            val dest = ByteArray(size)
+            try {
+                val n = d.decompress(src, off, len, dest, 0)
+                return dest.copyOf(n)
+            } catch (e: net.jpountz.lz4.LZ4Exception) {
+                if (size >= limit) throw java.io.IOException("115 返回的数据解压失败", e)
+                size = minOf(limit, size * 2)
+            }
+        }
     }
 
     /** k_ec 查询参数：时间戳（毫秒）编码后的令牌。 */
@@ -83,6 +103,8 @@ class Ec115Cipher private constructor(
     }
 
     companion object {
+        /** 解压后最大 16 MB（115 的接口响应远小于这个）。 */
+        const val MAX_PLAIN = 16 * 1024 * 1024
         private const val CRC_SALT = "^j>WD3Kr?J2gLFjD4W2y@"
         private const val P224_BASE = 28
         /** 115 服务端固定 P-224 公钥（X||Y，各 28 字节）。 */

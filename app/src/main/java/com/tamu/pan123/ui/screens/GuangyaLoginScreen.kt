@@ -35,6 +35,21 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /** 光鸭网页登录：从 localStorage 读取 @xbase/sdk 保存的凭据。 */
 object GuangyaLogin {
+    /** 只允许在光鸭官方域名（及子域名）内跳转，也只在这些页面上读取凭据。 */
+    val HOSTS = listOf("guangyapan.com")
+
+    /** 先用内存里的凭据列一次根目录，确认可用再保存；返回验证（可能已续期）后的凭据，失败返回 null。 */
+    suspend fun validate(creds: GyCreds): GyCreds? {
+        val mem = object : com.tamu.pan123.data.guangya.GyTokenStore {
+            @Volatile var c: GyCreds? = creds
+            override fun load() = c
+            override fun save(c: GyCreds) { this.c = c }
+        }
+        val ok = runCatching { GuangyaDrive("validate", mem).list(GuangyaDrive.ROOT_ID_FOR_VALIDATE); true }
+            .getOrElse { e -> if (e is kotlinx.coroutines.CancellationException) throw e; false }
+        return if (ok) mem.c else null
+    }
+
     /** 在页面里执行；返回 JSON 字符串 {c: 凭据原文, d: 网页设备 ID}，未登录返回空串。 */
     val EXTRACT_JS = """
         (function(){try{
@@ -91,25 +106,39 @@ fun GuangyaLoginScreen(nav: NavHostController, targetId: String?, showWeb: Boole
     val scope = rememberCoroutineScope()
     val preview = LocalInspectionMode.current || !showWeb
 
+    var checking by remember { mutableStateOf(false) }
+    val rejected = remember { mutableSetOf<String>() }
+
+    /** 先验证再保存：验证失败的凭据不保存，也不会覆盖账号里原有的凭据。 */
     fun onCreds(creds: GyCreds) {
-        if (captured) return
-        captured = true
-        val id = GuangyaLogin.save(creds, targetId)
-        AccountStore.setActive(id)
+        if (captured || checking || creds.accessToken in rejected) return
+        checking = true
         status = "已读取登录凭据，正在验证…"
         scope.launch {
-            val ok = runCatching { GuangyaDrive.from(AccountStore.get(id)!!).ping() }.getOrDefault(false)
-            status = if (ok) "登录成功" else "已保存凭据（验证列目录失败，可在账号页「测试连接」重试）"
-            delay(if (ok) 400 else 1500)
-            nav.popBackStack()
+            val good = GuangyaLogin.validate(creds)
+            checking = false
+            if (good != null) {
+                captured = true
+                val id = GuangyaLogin.save(good, targetId)
+                AccountStore.setActive(id)
+                status = "登录成功"
+                delay(400)
+                nav.popBackStack()
+            } else {
+                rejected += creds.accessToken
+                status = "读取到的凭据验证失败（未保存，原来的登录不受影响）。请确认已登录成功，或点「刷新」重试"
+            }
         }
     }
+
+    fun onOfficialPage(wv: WebView) = isOfficialUrl(wv.url, GuangyaLogin.HOSTS)
 
     // 网页登录成功后 @xbase/sdk 才写 localStorage：页面打开期间每 1.5 秒读一次
     LaunchedEffect(webViewRef) {
         val wv = webViewRef ?: return@LaunchedEffect
         while (!captured) {
             delay(1500)
+            if (!onOfficialPage(wv)) continue // 不在光鸭官方页面上时不读取
             wv.evaluateJavascript(GuangyaLogin.EXTRACT_JS) { r ->
                 GuangyaLogin.parseJsResult(r)?.let { onCreds(it) }
             }
@@ -158,6 +187,8 @@ fun GuangyaLoginScreen(nav: NavHostController, targetId: String?, showWeb: Boole
                             settings.useWideViewPort = true
                             settings.loadWithOverviewMode = true
                             CookieManager.getInstance().setAcceptCookie(true)
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
                             webChromeClient = WebChromeClient()
                             webViewClient = object : WebViewClient() {
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -165,7 +196,15 @@ fun GuangyaLoginScreen(nav: NavHostController, targetId: String?, showWeb: Boole
                                 }
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     loading = false
-                                    if (!captured) status = "请在页面中登录；成功后会自动保存"
+                                    if (!captured && !checking) status = if (isOfficialUrl(url, GuangyaLogin.HOSTS)) "请在页面中登录；成功后会自动保存"
+                                        else "当前页面不是光鸭官方网页，不会读取登录信息"
+                                }
+                                override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                    if (request?.isForMainFrame == false) return false
+                                    val u = request?.url?.toString()
+                                    if (isOfficialUrl(u, GuangyaLogin.HOSTS)) return false
+                                    status = "已阻止打开非光鸭官方网页：${request?.url?.host ?: u}"
+                                    return true
                                 }
                             }
                             loadUrl(GuangyaDrive.WEB_URL)

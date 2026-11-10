@@ -20,11 +20,9 @@ import org.w3c.dom.Element
 import java.io.IOException
 import java.net.URLDecoder
 import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 import javax.xml.parsers.DocumentBuilderFactory
 
 /**
@@ -32,7 +30,7 @@ import javax.xml.parsers.DocumentBuilderFactory
  * - ID = 相对于服务器地址的路径，以 "/" 开头，未编码（如 "/电影/盗梦空间 (2010)"）。
  * - 列目录 PROPFIND Depth:1；改名 / 移动 MOVE（Overwrite: F，绝不覆盖）；建目录 MKCOL；上传 PUT（If-None-Match: *）。
  * - URL 逐段百分号编码；目录请求统一带尾斜杠；href 解码兼容绝对 URL / 绝对路径 / 双重斜杠。
- * - 认证：Basic。可选「信任自签名证书」（仅对该账号生效）。
+ * - 认证：Basic。可选「信任自签名证书」（仅对该账号生效）：证书指纹固定，只信任用户确认过的那一张，见 [CertPinning]。
  */
 class WebDavDrive(
     override val accountId: String,
@@ -40,6 +38,8 @@ class WebDavDrive(
     private val user: String,
     private val password: String,
     private val insecure: Boolean = false,
+    /** 用户确认信任的服务器证书 SHA-256 指纹（只在 insecure 时使用）。 */
+    private val pinnedSha256: String? = null,
 ) : CloudDrive {
     override val kind = ProviderKind.WEBDAV
     override val writeIntervalMs = 100L
@@ -48,7 +48,7 @@ class WebDavDrive(
     /** 基础路径的解码段，用来把 href 还原成相对 ID。 */
     private val baseSegs: List<String> = base.pathSegments.filter { it.isNotEmpty() }
 
-    private val http: OkHttpClient = buildClient(insecure)
+    private val http: OkHttpClient = buildClient(insecure, pinnedSha256)
 
     // ---------------- URL 工具 ----------------
 
@@ -300,7 +300,7 @@ class WebDavDrive(
             val (code, props) = propfind("/", 1, asDir = true)
             if (code == 404) throw IOException("服务器地址的路径不存在")
             (props.size - 1).coerceAtLeast(0)
-        }
+        }.recoverCatching { e -> throw (CertPinning.findUntrusted(e) ?: e) }
     }
 
     companion object {
@@ -320,10 +320,11 @@ class WebDavDrive(
                 user = acct.extra["user"].orEmpty(),
                 password = pass,
                 insecure = acct.extra["insecure"] == "1",
+                pinnedSha256 = acct.extra["pin"],
             )
         }
 
-        private fun buildClient(insecure: Boolean): OkHttpClient {
+        private fun buildClient(insecure: Boolean, pin: String?): OkHttpClient {
             val b = OkHttpClient.Builder()
                 .connectTimeout(20, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
@@ -332,13 +333,10 @@ class WebDavDrive(
                 .addInterceptor(com.tamu.pan123.data.net.NetLog.interceptor("WebDAV"))
                 .followRedirects(false) // 不让 MOVE/PUT 被重定向成 GET
             if (insecure) {
-                val trustAll = object : X509TrustManager {
-                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                }
-                val ctx = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(trustAll), SecureRandom()) }
-                b.sslSocketFactory(ctx.socketFactory, trustAll).hostnameVerifier { _, _ -> true }
+                val tm = CertPinning.PinningTrustManager(pin)
+                val ctx = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(tm), SecureRandom()) }
+                b.sslSocketFactory(ctx.socketFactory, tm)
+                    .hostnameVerifier(CertPinning.hostnameVerifier(pin, okhttp3.internal.tls.OkHostnameVerifier))
             }
             return b.build()
         }

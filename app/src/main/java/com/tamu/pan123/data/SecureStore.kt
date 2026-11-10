@@ -12,8 +12,10 @@ import org.json.JSONObject
 import java.util.Base64
 
 /**
- * 敏感信息：123 token、passport、TMDB API 密钥。
- * 优先 EncryptedSharedPreferences；在 Robolectric / 设备不支持时回退到普通私有 prefs（仍不写日志）。
+ * 敏感信息：123 token、passport、TMDB API 密钥、各网盘账号凭据。
+ * 只用 EncryptedSharedPreferences。设备的加密存储不可用时**不会**再悄悄改存明文：
+ * 改为只放在内存里（退出 App 即消失），并通过 [available] 让设置页显示「安全存储不可用」提示。
+ * 旧版本可能留下的明文回退文件（secure_v1_fallback）会在启动时迁移进加密存储（或在不可用时只读进内存）然后删除。
  */
 object SecureStore {
     private const val PREF = "secure_v1"
@@ -25,6 +27,15 @@ object SecureStore {
     private const val TAG = "SecureStore"
 
     private lateinit var prefs: SharedPreferences
+    private val _available = MutableStateFlow(true)
+    /** false = 加密存储不可用：登录信息只保存在内存里，不写入磁盘。 */
+    val available: StateFlow<Boolean> = _available.asStateFlow()
+    const val UNAVAILABLE_MESSAGE = "安全存储不可用，已禁止保存登录信息（本次登录只保存在内存里，退出 App 后需要重新登录）"
+
+    /** 只在 Robolectric 单元测试里为 true：测试环境没有 AndroidKeyStore，用普通 prefs 代替。真机上永远是 false。 */
+    @Volatile internal var testPlainPrefs: Boolean = android.os.Build.FINGERPRINT == "robolectric"
+    /** 测试钩子：模拟加密存储创建失败。 */
+    @Volatile internal var simulateKeystoreFailure: Boolean = false
     private val _session = MutableStateFlow(Session.EMPTY)
     val session: StateFlow<Session> = _session.asStateFlow()
     private val _tmdbKey = MutableStateFlow("")
@@ -51,24 +62,68 @@ object SecureStore {
                 }
             }
         companion object { val EMPTY = Session("", 0, "") }
+        /** 不在日志 / 崩溃报告里泄露 token。 */
+        override fun toString() = "Session(token=${if (token.isBlank()) "" else "***"}, expiresAt=$expiresAt, passport=$maskedPassport)"
     }
 
     fun init(context: Context) {
         if (::prefs.isInitialized) return
         val app = context.applicationContext
-        prefs = try {
-            val master = MasterKey.Builder(app).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-            EncryptedSharedPreferences.create(
-                app, PREF, master,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-            )
+        val enc: SharedPreferences? = try {
+            if (simulateKeystoreFailure) throw java.security.GeneralSecurityException("simulated")
+            if (testPlainPrefs) app.getSharedPreferences("${PREF}_test", Context.MODE_PRIVATE)
+            else {
+                val master = MasterKey.Builder(app).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+                EncryptedSharedPreferences.create(
+                    app, PREF, master,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+                )
+            }
         } catch (e: Exception) {
-            // 不打印异常细节里可能夹带的路径以外的敏感信息
-            Log.w(TAG, "encrypted prefs unavailable, using private fallback")
-            app.getSharedPreferences(PREF_FALLBACK, Context.MODE_PRIVATE)
+            // 不打印异常细节（可能夹带敏感信息）
+            Log.w(TAG, "encrypted prefs unavailable; secrets kept in memory only")
+            null
         }
+        _available.value = enc != null
+        prefs = enc ?: MemoryPrefs()
+        migrateLegacyFallback(app, prefs)
         reload()
+    }
+
+    /** 旧版明文回退文件：内容搬进当前存储（加密 / 内存），然后清空并删除文件。 */
+    private fun migrateLegacyFallback(app: Context, target: SharedPreferences) {
+        val legacy = app.getSharedPreferences(PREF_FALLBACK, Context.MODE_PRIVATE)
+        val all = legacy.all
+        if (all.isNotEmpty()) {
+            val ed = target.edit()
+            for ((k, v) in all) {
+                if (target.contains(k)) continue // 加密存储里已有的以加密存储为准
+                when (v) {
+                    is String -> ed.putString(k, v)
+                    is Long -> ed.putLong(k, v)
+                    is Int -> ed.putInt(k, v)
+                    is Boolean -> ed.putBoolean(k, v)
+                    is Float -> ed.putFloat(k, v)
+                }
+            }
+            ed.commit()
+            legacy.edit().clear().commit()
+            Log.w(TAG, "migrated ${all.size} legacy plaintext entries")
+        }
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 24) app.deleteSharedPreferences(PREF_FALLBACK)
+            else java.io.File(app.applicationInfo.dataDir, "shared_prefs/$PREF_FALLBACK.xml").delete()
+        }
+    }
+
+    /** 测试用：重置单例。 */
+    internal fun resetForTest() {
+        if (::prefs.isInitialized) prefs.edit().clear().commit()
+        val f = SecureStore::class.java.getDeclaredField("prefs"); f.isAccessible = true; f.set(this, null)
+        _available.value = true
+        _session.value = Session.EMPTY
+        _tmdbKey.value = ""
     }
 
     fun reload() {

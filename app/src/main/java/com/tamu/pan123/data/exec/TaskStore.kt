@@ -15,6 +15,7 @@ object TaskStore {
 
     private fun file(): File = File(AppDirs.plans, "task_run.json")
 
+    @Synchronized
     fun load(): TaskRun? {
         val f = file()
         if (!f.isFile) return null
@@ -23,15 +24,14 @@ object TaskStore {
             ?.also { _run.value = it }
     }
 
+    @Synchronized
     fun save(run: TaskRun) {
         AppDirs.plans.mkdirs()
-        val f = file()
-        val tmp = File(f.path + ".tmp")
-        tmp.writeText(json.encodeToString(run))
-        tmp.renameTo(f)
+        com.tamu.pan123.data.io.AtomicFiles.writeText(file(), json.encodeToString(run))
         _run.value = run
     }
 
+    @Synchronized
     fun clear() {
         file().delete()
         _run.value = null

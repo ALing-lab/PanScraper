@@ -63,8 +63,10 @@ object Naming {
 
     val CJK = Regex("""[\u4e00-\u9fff]""")
 
+    /** 中文 / 阿拉伯数字 → Int。空串、无法识别的字返回 0（不会抛异常）。 */
     fun cn2int(text: String): Int {
-        if (text.all { it.isDigit() }) return text.toInt()
+        if (text.isEmpty()) return 0
+        if (text.all { it.isDigit() }) return text.toIntOrNull() ?: 0
         val t = text.replace("两", "二")
         if ("百" in t) {
             val (h, rest) = t.split("百", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
@@ -72,7 +74,7 @@ object Naming {
         }
         if ("十" in t) {
             val (a, o) = t.split("十", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
-            return (if (a.isEmpty()) 1 else CN_NUM.indexOf(a)) * 10 + (if (o.isEmpty()) 0 else CN_NUM.indexOf(o))
+            return (if (a.isEmpty()) 1 else CN_NUM.indexOf(a).coerceAtLeast(0)) * 10 + (if (o.isEmpty()) 0 else CN_NUM.indexOf(o).coerceAtLeast(0))
         }
         val i = CN_NUM.indexOf(t)
         return if (i >= 0) i else 0
@@ -85,6 +87,19 @@ object Naming {
 
     fun safeName(text: String): String =
         text.replace(Regex("""[\\/:*?"<>|]"""), " ").replace(Regex("""\s+"""), " ").trim()
+
+    /**
+     * 执行前的最后一道检查（计划文件可能被旧版本 / 手动改过）：去掉控制字符；
+     * 含路径分隔符、是 "." / ".."、为空或超长（UTF-8 超过 255 字节）的名字直接拒绝，绝不让改名 / 上传跑到别的目录。
+     */
+    fun execName(name: String?): String {
+        val n = (name ?: "").filter { it >= ' ' && it != '\u007f' }.trim()
+        require(n.isNotEmpty()) { "文件名为空，已跳过" }
+        require(n != "." && n != "..") { "文件名不合法（$n），已跳过" }
+        require('/' !in n && '\\' !in n) { "文件名里不能有 / 或 \\（$n），已跳过" }
+        require(n.toByteArray(Charsets.UTF_8).size <= 255) { "文件名太长（超过 255 字节），已跳过" }
+        return n
+    }
 
     fun dotTitle(title: String): String =
         safeName(title).replace(Regex("""\s+"""), ".").replace(Regex("""\.{2,}"""), ".").trim('.')
@@ -227,16 +242,6 @@ object Naming {
             }
         }
         return null
-    }
-
-    fun freeName(name: String, taken: MutableSet<String>): String {
-        if (name.lowercase() !in taken) return name
-        val (base, ext) = splitNameExt(name)
-        for (i in 2 until 100) {
-            val cand = "$base.v$i$ext"
-            if (cand.lowercase() !in taken) return cand
-        }
-        error("无法为 $name 找到不重名的名字")
     }
 
     fun seasonDirName(n: Int): String = if (n == 0) "Specials" else "Season $n"

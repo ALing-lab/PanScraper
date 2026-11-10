@@ -254,6 +254,13 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
             if (execMsg != null) item {
                 Text(execMsg!!, style = IosType.footnote, color = c.red, modifier = Modifier.padding(horizontal = 32.dp, vertical = 4.dp))
             }
+            // 扫描时因为文件太多被截断的文件夹：明确告诉用户
+            val truncated = p.flags.filter { it.contains("只扫描了前") }
+            if (truncated.isNotEmpty()) item(key = "truncated") {
+                GroupedSection(footer = truncated.joinToString("\n")) {
+                    IosRow("有文件夹没有扫描完", icon = Icons.Rounded.Warning, iconTint = c.orange, titleColor = c.orange, showDivider = false)
+                }
+            }
             // v0.3：执行成功的分组从预览里移除，只剩还没执行的
             val shownGroups = p.groups.filter { g -> p.actions.none { it.groupId == g.id } || p.actions.any { it.groupId == g.id && !it.done } }
             val doneGroups = p.groups.size - shownGroups.size
@@ -473,7 +480,7 @@ fun RematchScreen(nav: NavHostController, groupId: String) {
                 } else {
                     TmdbClient.searchMovieRaw(query, year.ifBlank { null }).map { TmdbClient.movieInfo(it) }
                 }
-            } catch (e: Exception) { err = e.message }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { err = e.message }
             finally { busy = false }
         }
     }
@@ -492,6 +499,8 @@ fun RematchScreen(nav: NavHostController, groupId: String) {
                 } else legacyApply(cur, groupId, info)
                 PlanStore.update { next }
                 nav.popBackStack()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 err = "重新规划失败：${e.message}"
             } finally { applying = false }

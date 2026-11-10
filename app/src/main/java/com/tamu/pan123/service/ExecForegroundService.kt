@@ -60,37 +60,58 @@ class ExecForegroundService : Service() {
             ACTION_RESUME -> ExecutionEngine.resume()
             ACTION_STOP -> {
                 ExecutionEngine.stop()
+                if (job?.isActive != true) stopSelfSafely()
             }
-            ACTION_START, null -> {
+            null -> {
+                // 系统在进程被杀后重新拉起服务（START_STICKY）：绝不重新执行整份计划。
+                // 只有存在「执行中 / 已暂停」且用户没点过「结束」的任务时，才接着那个任务继续（resumeExisting），否则直接退出。
+                if (job?.isActive == true) return START_STICKY
+                val decision = restartDecision(runCatching { TaskStore.load() }.getOrNull())
+                if (decision == null) { stopSelfSafely(); return START_NOT_STICKY }
+                launchRun(ids = null, resume = true, startPaused = decision == Restart.RESUME_PAUSED)
+            }
+            ACTION_START -> {
                 if (job?.isActive == true) {
                     android.widget.Toast.makeText(this, "已有任务在执行，请到「任务」页查看", android.widget.Toast.LENGTH_SHORT).show()
                     return START_STICKY
                 }
-                val ids = intent?.getStringArrayListExtra(EXTRA_ACTION_IDS)
-                val resume = intent?.getBooleanExtra(EXTRA_RESUME, false) ?: false
-                job = scope.launch {
-                    try {
-                        val plan = PlanStore.load()
-                        ExecutionEngine.run(plan, ids, resumeExisting = resume)
-                    } catch (e: Exception) {
-                        val msg = "执行失败：${e.message ?: e.javaClass.simpleName}"
-                        com.tamu.pan123.data.net.NetLog.error("exec", msg)
-                        val cur = TaskStore.load()
-                        if (cur != null && cur.status != TaskRun.STATUS_DONE) {
-                            val next = cur.copy(status = TaskRun.STATUS_DONE, message = msg, finishedAt = System.currentTimeMillis())
-                            TaskStore.save(next)
-                            ExecutionEngine.reportLive(next)
-                        } else {
-                            ExecutionEngine.reportStartError(msg)
-                        }
-                    } finally {
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                        stopSelf()
-                    }
+                val ids = intent.getStringArrayListExtra(EXTRA_ACTION_IDS)
+                val resume = intent.getBooleanExtra(EXTRA_RESUME, false)
+                launchRun(ids, resume, startPaused = false)
+            }
+            else -> if (job?.isActive != true) stopSelfSafely()
+        }
+        // 只在确实有任务在跑时才让系统帮忙重启
+        return if (job?.isActive == true) START_STICKY else START_NOT_STICKY
+    }
+
+    private fun launchRun(ids: List<String>?, resume: Boolean, startPaused: Boolean) {
+        job = scope.launch {
+            try {
+                val plan = PlanStore.load()
+                ExecutionEngine.run(plan, ids, resumeExisting = resume, startPaused = startPaused)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val msg = "执行失败：${e.message ?: e.javaClass.simpleName}"
+                com.tamu.pan123.data.net.NetLog.error("exec", msg)
+                val cur = TaskStore.load()
+                if (cur != null && cur.status != TaskRun.STATUS_DONE) {
+                    val next = cur.copy(status = TaskRun.STATUS_DONE, message = msg, finishedAt = System.currentTimeMillis())
+                    TaskStore.save(next)
+                    ExecutionEngine.reportLive(next)
+                } else {
+                    ExecutionEngine.reportStartError(msg)
                 }
+            } finally {
+                stopSelfSafely()
             }
         }
-        return START_STICKY
+    }
+
+    private fun stopSelfSafely() {
+        runCatching { stopForeground(STOP_FOREGROUND_DETACH) }
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -138,7 +159,18 @@ class ExecForegroundService : Service() {
             .build()
     }
 
+    enum class Restart { RESUME_RUNNING, RESUME_PAUSED }
+
     companion object {
+        /** 服务被系统重新拉起（intent == null）时怎么办：null = 什么都不做、退出服务。 */
+        internal fun restartDecision(cur: TaskRun?): Restart? = when {
+            cur == null || cur.userStopped -> null
+            cur.actionIds.isEmpty() -> null
+            cur.status == TaskRun.STATUS_RUNNING -> Restart.RESUME_RUNNING
+            cur.status == TaskRun.STATUS_PAUSED -> Restart.RESUME_PAUSED
+            else -> null // idle / stopping / done
+        }
+
         const val CHANNEL = "exec"
         const val NOTIF_ID = 42
         const val ACTION_START = "com.tamu.pan123.EXEC_START"

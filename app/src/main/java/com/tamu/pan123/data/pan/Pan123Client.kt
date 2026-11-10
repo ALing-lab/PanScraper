@@ -172,6 +172,8 @@ object Pan123Client {
     suspend fun ping(token: String? = null): Boolean = try {
         listFiles(0, pageSize = 1, token = token)
         true
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (_: Exception) {
         false
     }
@@ -292,7 +294,8 @@ object Pan123Client {
                                 .put("partNumberStart", part).put("partNumberEnd", part + 1),
                         )
                         if (!prep.ok) error("prepare ${prep.err()}")
-                        val urls = JSONObject(prep.data!!.toString()).getJSONObject("presignedUrls")
+                        val pd = prep.data ?: error("123 返回的分片上传地址为空")
+                        val urls = JSONObject(pd.toString()).getJSONObject("presignedUrls")
                         val putUrl = urls.getString(part.toString())
                         putToStorage(putUrl, chunk)
                         offset = end
@@ -307,7 +310,8 @@ object Pan123Client {
                             .put("storageNode", node).put("uploadId", uploadId),
                     )
                     if (!auth.ok) error("auth ${auth.err()}")
-                    val putUrl = JSONObject(auth.data!!.toString())
+                    val ad = auth.data ?: error("123 返回的上传地址为空")
+                    val putUrl = JSONObject(ad.toString())
                         .getJSONObject("presignedUrls").getString("1")
                     putToStorage(putUrl, data)
                     completeUpload(fileId, bucket, key, node, uploadId, multipart = false, token = token)

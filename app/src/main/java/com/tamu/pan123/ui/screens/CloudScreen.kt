@@ -167,6 +167,8 @@ private fun CloudBrowser(
         scope.launch {
             try {
                 items = DriveRegistry.override?.list(id) ?: drive.list(id)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 error = e.message ?: "加载失败"
                 items = emptyList()

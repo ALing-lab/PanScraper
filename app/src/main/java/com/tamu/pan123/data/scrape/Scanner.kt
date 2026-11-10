@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -154,6 +155,9 @@ object Scanner {
      * 同时检测本应用以前生成、但与新匹配不符的文件，生成可选的「清理旧刮削文件」操作（默认不勾选，只移动不删除）。
      */
     suspend fun replanGroup(plan: ScrapePlan, groupId: String, info: MatchInfo, cloud: CloudDrive): ScrapePlan =
+        scanMutex.withLock { replanGroupLocked(plan, groupId, info, cloud) }
+
+    private suspend fun replanGroupLocked(plan: ScrapePlan, groupId: String, info: MatchInfo, cloud: CloudDrive): ScrapePlan =
         withContext(Dispatchers.IO) {
             val old = plan.groups.firstOrNull { it.id == groupId } ?: error("找不到分组")
             val folderId = old.folderId ?: error("这个分组不是文件夹，无法整体重新规划")
@@ -268,13 +272,22 @@ object Scanner {
     }
 
     /** 当前扫描使用的网盘（scan 期间有效）。 */
-    private var drive: CloudDrive = com.tamu.pan123.data.drive.PendingDrive(com.tamu.pan123.data.drive.ProviderKind.P123, "")
+    @Volatile private var drive: CloudDrive = com.tamu.pan123.data.drive.PendingDrive(com.tamu.pan123.data.drive.ProviderKind.P123, "")
+    /** 扫描 / 重新匹配共用 drive、listCache 等状态：同一时间只允许一个在跑，避免互相覆盖。 */
+    private val scanMutex = kotlinx.coroutines.sync.Mutex()
 
     suspend fun scan(
         roots: List<Pair<String, String>>, // id to name
         fullDrive: Boolean,
         cloud: CloudDrive = DriveRegistry.active(),
         preflightTmdb: Boolean = false,
+    ): ScrapePlan = scanMutex.withLock { scanLocked(roots, fullDrive, cloud, preflightTmdb) }
+
+    private suspend fun scanLocked(
+        roots: List<Pair<String, String>>,
+        fullDrive: Boolean,
+        cloud: CloudDrive,
+        preflightTmdb: Boolean,
     ): ScrapePlan = withContext(Dispatchers.IO) {
         cancelFlag = false
         runCounter++
@@ -337,7 +350,7 @@ object Scanner {
         com.tamu.pan123.data.history.HistoryStore.remembered(acc, paths, id, name)
     }
 
-    private val listCache = HashMap<String, List<CloudEntry>>()
+    private val listCache = java.util.concurrent.ConcurrentHashMap<String, List<CloudEntry>>()
 
     /** 列目录（同一次扫描内缓存，避免分类判断时重复请求）。 */
     private suspend fun ls(id: String): List<CloudEntry> {
@@ -512,7 +525,10 @@ object Scanner {
         fun pathFrom(root: Node): String = chain().takeWhile { it !== root }.toList().reversed().joinToString("/") { it.entry.fileName }
     }
 
-    private suspend fun buildTree(folder: CloudEntry, items: List<CloudEntry>, descend: Boolean, maxDepth: Int = 3): List<Node> {
+    const val MAX_TREE_NODES = 80
+    internal fun truncatedFlag(folder: String) = "「$folder」文件太多，只扫描了前 $MAX_TREE_NODES 项（其余子文件夹没有处理，可以分开选择这些子文件夹再扫描）"
+
+    private suspend fun buildTree(folder: CloudEntry, items: List<CloudEntry>, descend: Boolean, maxDepth: Int = 3, flags: MutableList<String>? = null): List<Node> {
         val root = Node(folder, items, null, 0)
         val out = mutableListOf(root)
         if (!descend) return out
@@ -522,7 +538,11 @@ object Scanner {
             if (n.depth >= maxDepth) continue
             for (d in n.items.filter { it.isDir }) {
                 if (ignoredDir(d.fileName)) continue
-                if (out.size >= 80) break
+                if (out.size >= MAX_TREE_NODES) {
+                    val f = truncatedFlag(folder.fileName)
+                    if (flags != null && f !in flags) flags += f
+                    break
+                }
                 val c = Node(if (d.parentFileId == null) d.copy(parentFileId = n.id) else d, ls(d.fileId), n, n.depth + 1)
                 out += c
                 queue += c
@@ -578,7 +598,7 @@ object Scanner {
         rootTaken: MutableSet<String>,
         forced: MatchInfo? = null,
     ): Int {
-        val tree = buildTree(folder, items, descend = forced?.kind != "movie")
+        val tree = buildTree(folder, items, descend = forced?.kind != "movie", flags = flags)
         val allVideos = tree.flatMap { n -> n.items.filter { isVideo(it) } }
         if (allVideos.isEmpty()) {
             flags += "「${folder.fileName}」没有视频文件，跳过"

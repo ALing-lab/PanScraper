@@ -30,7 +30,8 @@ object ExecutionEngine {
     const val MAX_CONSECUTIVE_FAILS = 3
 
     private val mutex = Mutex()
-    private val pauseGate = Mutex(locked = false)
+    /** 保护 _live / TaskStore 的读改写：通知栏按钮（暂停 / 结束）和执行循环可能同时更新状态。 */
+    private val statusLock = Any()
     @Volatile private var pauseRequested = false
     @Volatile private var stopRequested = false
 
@@ -52,15 +53,13 @@ object ExecutionEngine {
         if (pauseRequested) {
             pauseRequested = false
             updateStatus(TaskRun.STATUS_RUNNING, "继续执行…")
-            if (pauseGate.isLocked) runCatching { pauseGate.unlock() }
         }
     }
 
     fun stop() {
         stopRequested = true
         pauseRequested = false
-        if (pauseGate.isLocked) runCatching { pauseGate.unlock() }
-        updateStatus(TaskRun.STATUS_STOPPING, "正在结束…")
+        updateStatus(TaskRun.STATUS_STOPPING, "正在结束…", userStopped = true)
     }
 
     /** 启动失败（读不到计划 / 网盘账号不可用 / 没有可执行项）时，写一条任务记录让「任务」页显示原因，而不是静默无反应。 */
@@ -80,9 +79,10 @@ object ExecutionEngine {
         _live.value = run
     }
 
-    private fun updateStatus(status: String, message: String) {
-        val cur = _live.value ?: TaskStore.load() ?: return
-        val next = cur.copy(status = status, message = message)
+    private fun updateStatus(status: String, message: String, userStopped: Boolean = false) = synchronized(statusLock) {
+        val cur = _live.value ?: TaskStore.load() ?: return@synchronized
+        if (cur.status == TaskRun.STATUS_DONE) return@synchronized // 已结束的任务不再改状态
+        val next = cur.copy(status = status, message = message, userStopped = cur.userStopped || userStopped)
         TaskStore.save(next)
         _live.value = next
     }
@@ -94,16 +94,18 @@ object ExecutionEngine {
         plan: ScrapePlan = PlanStore.load(),
         actionIds: List<String>? = null,
         resumeExisting: Boolean = false,
+        /** 进程被系统杀掉后恢复一个「已暂停」的任务：恢复后仍保持暂停，等用户点继续。 */
+        startPaused: Boolean = false,
     ): TaskSummary = mutex.withLock {
         withContext(Dispatchers.IO) {
             stopRequested = false
-            pauseRequested = false
+            pauseRequested = startPaused
             val drive = driveOverride ?: DriveRegistry.forAccount(plan.accountId)
 
             val existing = if (resumeExisting) TaskStore.load() else null
             val ids = when {
                 actionIds != null -> actionIds
-                existing != null && existing.status in listOf(TaskRun.STATUS_PAUSED, TaskRun.STATUS_STOPPING) ->
+                existing != null && existing.status in listOf(TaskRun.STATUS_RUNNING, TaskRun.STATUS_PAUSED, TaskRun.STATUS_STOPPING) ->
                     existing.actionIds.filter { id ->
                         plan.actions.any { it.id == id && !it.done }
                     }
@@ -148,9 +150,7 @@ object ExecutionEngine {
             val refs = run.mkdirRefs.toMutableMap()
             val remap = IdRemap(run.idRemap, pathMode = drive.kind.idsArePaths)
             val failed = run.failedIds.toMutableList()
-            var ok = run.ok
-            var fail = run.fail
-            var skipped = run.skipped
+            // 成功 / 失败 / 跳过的数量一律从 items 里数（counted），不再另外累加，避免继续执行 / 重试时重复计数
             var streak = 0
             val newlyOk = mutableListOf<String>()
             var stoppedOnFails = false
@@ -207,12 +207,12 @@ object ExecutionEngine {
                 val action = planActions[id]
                 if (action == null) {
                     setItem(id) { it.copy(status = TaskItem.SKIP, at = System.currentTimeMillis(), note = "计划里找不到这一项") }
-                    skipped++; run = counted(run); persist(run); continue
+                    run = counted(run); persist(run); continue
                 }
                 if (action.done && items.getOrNull(pos[id] ?: -1)?.status == TaskItem.OK) continue // 继续 / 再次执行时跳过已成功的项
                 if (action.done || action.op !in EXEC_OPS) {
                     setItem(id) { it.copy(status = TaskItem.SKIP, at = System.currentTimeMillis(), note = if (action.done) "之前已完成" else "不需要执行") }
-                    skipped++; run = counted(run); persist(run); continue
+                    run = counted(run); persist(run); continue
                 }
                 val phase = ExecPhases.of(action.op)
                 setItem(id) { it.copy(status = TaskItem.RUNNING, at = System.currentTimeMillis(), attempts = it.attempts + 1) }
@@ -244,7 +244,6 @@ object ExecutionEngine {
                 delay(maxOf(OP_SLEEP_MS, if (OP_SLEEP_MS == 0L) 0L else drive.writeIntervalMs))
 
                 if (result.isSuccess) {
-                    ok++
                     streak = 0
                     failed.remove(id)
                     val existed = result.getOrNull() == "已存在"
@@ -252,20 +251,19 @@ object ExecutionEngine {
                     setItem(id) { it.copy(status = if (existed) TaskItem.SKIP else TaskItem.OK, at = System.currentTimeMillis(), error = null,
                         note = if (existed) "网盘里已有同名文件，未覆盖" else null) }
                     markPlanAction(id) { it.copy(done = true, error = null, note = result.getOrNull()) }
-                    planActions[id] = planActions[id]!!.copy(done = true, error = null)
+                    planActions[id]?.let { planActions[id] = it.copy(done = true, error = null) }
                     // 若 mkdir，refs 已在 executeOne 写入
                     run = counted(run).copy(consecutiveFails = 0,
                         mkdirRefs = refs.toMap(), idRemap = remap.snapshot(), failedIds = failed.toList())
                 } else {
-                    fail++
                     streak++
                     if (id !in failed) failed += id
                     val err = result.exceptionOrNull()?.let { e -> e.message ?: e.javaClass.simpleName } ?: "未知错误"
                     NetLog.error("exec", "${labelOf(action)} 失败：$err")
                     markPlanAction(id) { it.copy(done = false, error = err) }
-                    planActions[id] = planActions[id]!!.copy(error = err)
+                    planActions[id]?.let { planActions[id] = it.copy(error = err) }
                     setItem(id) { it.copy(status = TaskItem.FAIL, at = System.currentTimeMillis(), error = err) }
-                    run = counted(run).copy(ok = ok, fail = fail, skipped = skipped, consecutiveFails = streak,
+                    run = counted(run).copy(consecutiveFails = streak,
                         mkdirRefs = refs.toMap(), idRemap = remap.snapshot(), failedIds = failed.toList(), message = "失败：$err")
                     persist(run)
                     if (streak >= MAX_CONSECUTIVE_FAILS) {
@@ -287,7 +285,7 @@ object ExecutionEngine {
 
             val elapsed = System.currentTimeMillis() - started
             run = counted(run)
-            ok = run.ok; fail = run.fail; skipped = run.skipped
+            val ok = run.ok; val fail = run.fail; val skipped = run.skipped
             val summary = TaskSummary(
                 ok = ok, fail = fail, skipped = skipped, elapsedMs = elapsed,
                 failed = failed.mapNotNull { fid ->
@@ -353,9 +351,11 @@ object ExecutionEngine {
         folder = folder.ifBlank { group },
     )
 
-    private fun persist(run: TaskRun) {
-        TaskStore.save(run)
-        _live.value = run
+    private fun persist(run: TaskRun) = synchronized(statusLock) {
+        // 用户点过「结束」就一直记着（进程被杀后重启服务时不会再自动恢复这个任务）
+        val r = if (stopRequested && !run.userStopped && run.status != TaskRun.STATUS_DONE) run.copy(userStopped = true) else run
+        TaskStore.save(r)
+        _live.value = r
     }
 
     private fun markPlanAction(id: String, transform: (PlanAction) -> PlanAction) {
@@ -385,14 +385,14 @@ object ExecutionEngine {
             when (action.op) {
                 "rename" -> {
                     val fid = remap.resolve(action.fileId) ?: error("缺少 fileId")
-                    val newId = drive.rename(fid, action.newName).getOrThrow()
+                    val newId = drive.rename(fid, com.tamu.pan123.data.naming.Naming.execName(action.newName)).getOrThrow()
                     remap.record(fid, newId)
                     action.fileId?.let { remap.record(it, newId) }
                     Result.success("ok")
                 }
                 "mkdir" -> {
                     val parent = remap.resolve(action.parentId) ?: error("缺少 parentId")
-                    val name = action.newName
+                    val name = com.tamu.pan123.data.naming.Naming.execName(action.newName)
                     val fid = drive.mkdir(parent, name).getOrThrow()
                     // 以计划里的原始 parentId 作键，便于 move 按 destLabel 找到
                     refs["${action.parentId}:$name"] = fid
@@ -410,7 +410,7 @@ object ExecutionEngine {
                 "artwork" -> {
                     val parent = (if (action.destRef != null) refs["action:${action.destRef}"]?.let { remap.resolve(it) }
                         else remap.resolve(action.parentId)) ?: error(if (action.destRef != null) "目标文件夹 ${action.destLabel ?: ""} 还没建好" else "缺少 parentId")
-                    val name = action.newName
+                    val name = com.tamu.pan123.data.naming.Naming.execName(action.newName)
                     // 已存在则跳过（不覆盖）
                     val exists = runCatching { drive.exists(parent, name) }.getOrDefault(false)
                     if (exists) return Result.success("已存在")
@@ -423,11 +423,10 @@ object ExecutionEngine {
                     if (drive.trashSupport == com.tamu.pan123.data.drive.TrashSupport.NONE)
                         error(com.tamu.pan123.data.drive.TrashSupport.noneHint(drive.kind))
                     val fid = remap.resolve(action.fileId) ?: error("缺少 fileId")
-                    // 安全检查：文件夹里（含下一层）还有视频就不删
-                    val kids = drive.list(fid)
-                    val videos = kids.count { !it.isDir && com.tamu.pan123.data.naming.Naming.splitNameExt(it.fileName).second.lowercase() in com.tamu.pan123.data.naming.Naming.VIDEO_EXT } +
-                        kids.filter { it.isDir }.take(20).sumOf { d -> drive.list(d.fileId).count { !it.isDir && com.tamu.pan123.data.naming.Naming.splitNameExt(it.fileName).second.lowercase() in com.tamu.pan123.data.naming.Naming.VIDEO_EXT } }
-                    if (videos > 0) error("文件夹里还有 $videos 个视频（可能移动没成功），为安全起见未删除")
+                    // 安全检查：递归检查文件夹里（所有层级）还有没有视频；检查不完（太大 / 太深）就不删
+                    val scan = countVideosBounded(drive, fid)
+                    if (!scan.complete) error(DELETE_TOO_BIG)
+                    if (scan.videos > 0) error("文件夹里还有 ${scan.videos} 个视频（可能移动没成功），为安全起见未删除")
                     val msg = drive.trash(fid).getOrElse { e ->
                         throw IllegalStateException(com.tamu.pan123.data.drive.TrashSupport.explain(drive.kind, e.message ?: e.javaClass.simpleName), e)
                     }
@@ -435,9 +434,47 @@ object ExecutionEngine {
                 }
                 else -> Result.success("skip")
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // 取消（结束任务 / 服务被销毁）要往上传，不能当成一次普通失败继续执行
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    const val DELETE_TOO_BIG = "文件夹太大，未检查完，已跳过删除"
+
+    data class VideoScan(val videos: Int, val complete: Boolean)
+
+    /**
+     * 删除前的安全检查：广度优先递归数视频。超过 [maxDepth] 层、[maxEntries] 个条目或 [maxDirs] 个文件夹就停下，
+     * 返回 complete=false（调用方据此拒绝删除）。
+     */
+    internal suspend fun countVideosBounded(
+        drive: CloudDrive, folderId: String,
+        maxDepth: Int = 8, maxEntries: Int = 5_000, maxDirs: Int = 300,
+    ): VideoScan {
+        var videos = 0
+        var entries = 0
+        var dirs = 0
+        var frontier = listOf(folderId)
+        var depth = 0
+        while (frontier.isNotEmpty()) {
+            if (depth > maxDepth) return VideoScan(videos, complete = false)
+            val next = mutableListOf<String>()
+            for (dir in frontier) {
+                if (++dirs > maxDirs) return VideoScan(videos, complete = false)
+                val kids = drive.list(dir)
+                entries += kids.size
+                if (entries > maxEntries) return VideoScan(videos, complete = false)
+                for (k in kids) {
+                    if (k.isDir) next += k.fileId
+                    else if (com.tamu.pan123.data.naming.Naming.splitNameExt(k.fileName).second.lowercase() in com.tamu.pan123.data.naming.Naming.VIDEO_EXT) videos++
+                }
+            }
+            frontier = next
+            depth++
+        }
+        return VideoScan(videos, complete = true)
     }
 
     private fun resolveDest(action: PlanAction, refs: Map<String, String>): String? {

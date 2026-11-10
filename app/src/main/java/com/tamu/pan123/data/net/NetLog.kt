@@ -77,7 +77,12 @@ object NetLog {
         if (fileEnabled) runCatching {
             val f = logFile() ?: return@runCatching
             f.parentFile?.mkdirs()
-            if (f.length() > 2_000_000) f.renameTo(File(f.parentFile, "net.1.log"))
+            if (f.length() > 2_000_000) {
+                val old = File(f.parentFile, "net.1.log")
+                old.delete()
+                // 改名失败（极少见）时直接清空，避免日志无限增长
+                if (!f.renameTo(old)) f.writeText("")
+            }
             f.appendText(l + "\n")
         }
     }

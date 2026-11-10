@@ -170,9 +170,7 @@ object TmdbClient {
             val text = resp.text
             runCatching {
                 cp.parentFile?.mkdirs()
-                val tmp = File(cp.path + ".tmp")
-                tmp.writeText(text)
-                tmp.renameTo(cp)
+                com.tamu.pan123.data.io.AtomicFiles.writeText(cp, text)
             }
             text
         }

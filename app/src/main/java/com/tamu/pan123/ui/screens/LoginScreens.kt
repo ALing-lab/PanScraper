@@ -3,7 +3,6 @@ package com.tamu.pan123.ui.screens
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -44,6 +43,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+/** 123 网页登录只允许在这些官方域名（及其子域名）内跳转，也只在这些页面上读取登录状态。 */
+internal val PAN123_HOSTS = listOf("123pan.com", "123pan.cn")
+
+/** https 且主机属于 [hosts]（点边界匹配）。 */
+internal fun isOfficialUrl(url: String?, hosts: List<String>): Boolean {
+    val u = url?.let { runCatching { java.net.URI(it) }.getOrNull() } ?: return false
+    return u.scheme.equals("https", true) && com.tamu.pan123.data.net.HostMatch.matchesAny(u.host, hosts)
+}
+
 private val LOGIN_URLS = listOf(
     "https://www.123pan.com/login",
     "https://login.123pan.com/",
@@ -64,16 +72,35 @@ fun WebLoginScreen(nav: NavHostController) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val scope = rememberCoroutineScope()
 
+    var checking by remember { mutableStateOf(false) }
+    val rejected = remember { mutableSetOf<String>() }
+
+    /** 先验证（列目录）再保存：验证失败的 token 不保存，也不会覆盖已有的登录。 */
     fun onToken(token: String, source: String) {
-        if (captured || token.isBlank() || token.length < 20) return
-        captured = true
-        com.tamu.pan123.data.drive.AccountStore.save123Login(token)
+        if (captured || checking || token.isBlank() || token.length < 20 || token in rejected) return
+        checking = true
         status = "已获取 token（$source），正在验证…"
         scope.launch {
-            val ok = try { Pan123Client.ping(token) } catch (_: Exception) { false }
-            status = if (ok) "登录成功" else "已保存 token（验证列目录失败，可稍后重试）"
-            delay(400)
-            nav.popBackStack()
+            val ok = try { Pan123Client.ping(token) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { false }
+            checking = false
+            if (ok) {
+                captured = true
+                com.tamu.pan123.data.drive.AccountStore.save123Login(token)
+                status = "登录成功"
+                delay(400)
+                nav.popBackStack()
+            } else {
+                rejected += token
+                status = "读取到的 token 验证失败（未保存，原来的登录不受影响）。请确认已登录成功，或点「刷新」重试"
+            }
+        }
+    }
+
+    fun extract(view: WebView?) {
+        if (view == null || !isOfficialUrl(view.url, PAN123_HOSTS)) return
+        view.evaluateJavascript(EXTRACT_JS) { r ->
+            val t = r?.trim()?.removeSurrounding("\"")?.takeIf { it.isNotBlank() && it != "null" } ?: return@evaluateJavascript
+            onToken(t.replace("\\\"", "\""), "localStorage")
         }
     }
 
@@ -111,13 +138,9 @@ fun WebLoginScreen(nav: NavHostController) {
                             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                        addJavascriptInterface(object {
-                            @JavascriptInterface
-                            fun onToken(token: String, source: String) {
-                                // 回到主线程处理
-                                post { onToken(token, source) }
-                            }
-                        }, "TamuBridge")
+                        // 不再注入 JS 桥（任何页面都能调用它）；改为只在 123 官方页面上执行脚本、读取返回值
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
                         webChromeClient = WebChromeClient()
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -127,19 +150,28 @@ fun WebLoginScreen(nav: NavHostController) {
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 loading = false
                                 status = "请在页面中登录；成功后会自动获取 token"
-                                view?.evaluateJavascript(EXTRACT_JS, null)
+                                if (!isOfficialUrl(url, PAN123_HOSTS)) {
+                                    status = "当前页面不是 123 官方网页，不会读取登录信息"
+                                    return
+                                }
+                                extract(view)
                                 // 再轮询几次，登录跳转后 localStorage 才写入
                                 scope.launch {
                                     repeat(12) {
                                         delay(1500)
                                         if (captured) return@launch
-                                        view?.evaluateJavascript(EXTRACT_JS, null)
-                                        scrapeCookies()?.let { onToken(it, "cookie") }
+                                        extract(view)
+                                        if (isOfficialUrl(view?.url, PAN123_HOSTS)) scrapeCookies()?.let { onToken(it, "cookie") }
                                     }
                                 }
                             }
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                return false
+                                // 只允许在 123 官方域名内跳转（主框架）；其它网址一律拦下
+                                if (request?.isForMainFrame == false) return false
+                                val u = request?.url?.toString()
+                                if (isOfficialUrl(u, PAN123_HOSTS)) return false
+                                status = "已阻止打开非 123 官方网页：${request?.url?.host ?: u}"
+                                return true
                             }
                         }
                         loadUrl(LOGIN_URLS.first())
@@ -186,35 +218,32 @@ private fun scrapeCookies(): String? {
 private val EXTRACT_JS = """
 (function(){
   function looksJwt(s){ return typeof s==='string' && s.split('.').length>=3 && s.length>40; }
-  function dig(store, label){
+  function dig(store){
     try {
       for (var i=0;i<store.length;i++){
         var k=store.key(i); var v=store.getItem(k);
         if (!v) continue;
-        if (k && /authorToken|token|Authorization/i.test(k) && looksJwt(v.replace(/^Bearer\s+/i,''))) {
-          TamuBridge.onToken(v.replace(/^Bearer\s+/i,''), label+':'+k); return true;
-        }
+        var b=v.replace(/^Bearer\s+/i,'');
+        if (k && /authorToken|token|Authorization/i.test(k) && looksJwt(b)) return b;
         try {
           var o=JSON.parse(v);
           if (o && typeof o==='object'){
-            for (var kk of ['authorToken','token','Token','access_token','accessToken']) {
-              if (looksJwt(String(o[kk]||''))) { TamuBridge.onToken(String(o[kk]), label+':json.'+kk); return true; }
-            }
-            if (o.data && looksJwt(String(o.data.token||o.data.Token||''))) {
-              TamuBridge.onToken(String(o.data.token||o.data.Token), label+':data.token'); return true;
-            }
+            var ks=['authorToken','token','Token','access_token','accessToken'];
+            for (var j=0;j<ks.length;j++){ if (looksJwt(String(o[ks[j]]||''))) return String(o[ks[j]]); }
+            if (o.data && looksJwt(String(o.data.token||o.data.Token||''))) return String(o.data.token||o.data.Token);
           }
         } catch(e){}
       }
     } catch(e){}
-    return false;
+    return '';
   }
-  if (dig(localStorage,'local')) return;
-  if (dig(sessionStorage,'session')) return;
+  var t=dig(localStorage); if (t) return t;
+  t=dig(sessionStorage); if (t) return t;
   try {
     var m=document.cookie.match(/(?:^|;\s*)(?:authorToken|token)=([^;]+)/i);
-    if (m && looksJwt(m[1])) TamuBridge.onToken(m[1], 'document.cookie');
+    if (m && looksJwt(m[1])) return m[1];
   } catch(e){}
+  return '';
 })();
 """.trimIndent()
 
@@ -244,6 +273,8 @@ fun PasswordLoginScreen(nav: NavHostController) {
                 Pan123Client.loginPassport(passport, password)
                 password = ""
                 nav.popBackStack()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 error = e.message ?: "登录失败"
             } finally {

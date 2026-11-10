@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WebDAV 常用局域网 NAS 的 http 地址（如 http://192.168.1.5:5005）。Android 的网络安全配置不支持按 IP 段放行，
+  所以默认允许明文（只有用户自己填 http:// 的 WebDAV 地址会用到）；
+  网盘 / TMDB / GitHub 等固定的官方域名一律禁止明文，只能 https。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">123pan.com</domain>
+        <domain includeSubdomains="true">123pan.cn</domain>
+        <domain includeSubdomains="true">115.com</domain>
+        <domain includeSubdomains="true">115cdn.com</domain>
+        <domain includeSubdomains="true">guangyapan.com</domain>
+        <domain includeSubdomains="true">themoviedb.org</domain>
+        <domain includeSubdomains="true">tmdb.org</domain>
+        <domain includeSubdomains="true">github.com</domain>
+        <domain includeSubdomains="true">githubusercontent.com</domain>
+    </domain-config>
+</network-security-config>

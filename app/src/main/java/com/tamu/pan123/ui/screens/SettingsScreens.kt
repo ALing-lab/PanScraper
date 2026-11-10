@@ -38,7 +38,12 @@ fun SettingsScreen(nav: NavHostController) {
         val n = accounts.count { com.tamu.pan123.data.drive.AccountStore.isLoggedIn(it) }
         if (n == 0) "未登录" else "$n 个已登录"
     }
+    val secureOk by SecureStore.available.collectAsState()
     LargeTitlePage("设置", bottomInset = bottomInset()) {
+        if (!secureOk) section("secure-warn") {
+            IosRow("安全存储不可用", subtitle = SecureStore.UNAVAILABLE_MESSAGE, icon = Icons.Rounded.GppBad,
+                iconTint = c.red, titleColor = c.red, showDivider = false)
+        }
         section("account", header = "账号") {
             IosRow(
                 "资源中心",
