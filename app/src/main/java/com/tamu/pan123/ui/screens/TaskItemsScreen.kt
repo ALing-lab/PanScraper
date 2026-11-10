@@ -196,7 +196,7 @@ fun TaskItemsScreen(
             val n = pending.size + selected.size
             val ok = !busy && n > 0
             section("again", footer = "继续所有还没执行到的项（${pending.size}）+ 上面勾选的失败项（${selected.size}）；没勾选的失败项会跳过，已完成的不会重做。") {
-                IosRow("再次执行未完成项 ($n)", titleColor = if (ok) c.blue else c.tertiaryLabel, chevron = ok, showDivider = false) {
+                IosRow("再次执行未完成项 ($n)", titleColor = if (ok) c.link else c.tertiaryLabel, chevron = ok, showDivider = false) {
                     if (!ok) return@IosRow
                     val want = (pending + selected).toSet()
                     val ordered = items.map { it.id }.filter { it in want }
@@ -274,7 +274,7 @@ internal fun BeforeAfterRow(it: TaskItem, showPhase: Boolean, hideWait: Boolean 
                 Text(title ?: opTitle(it), style = IosType.footnote, color = if (it.kind == "cleanup") c.purple else c.secondaryLabel)
                 if (showPhase) {
                     Spacer(Modifier.width(6.dp))
-                    Text("第 ${it.phase} 步", style = IosType.footnote, color = c.blue,
+                    Text("第 ${it.phase} 步", style = IosType.footnote, color = c.link,
                         modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(c.blue.copy(alpha = 0.12f)).padding(horizontal = 5.dp))
                 }
                 if (it.folder.isBlank() && it.group.isNotBlank() && it.group != folderOf(it)) {

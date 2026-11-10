@@ -16,8 +16,8 @@ android {
         applicationId = "com.tamu.pan123scraper"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.3.4"
+        versionCode = 16
+        versionName = "0.3.5"
     }
     // 正式签名：从仓库外的 keystore.properties 读取（默认 /workspace/signing/keystore.properties，
     // 也可用环境变量 PANSCRAPER_SIGNING_PROPS 指定）。文件不存在时 release 不签名，开源构建照常能编译。

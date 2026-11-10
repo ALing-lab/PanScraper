@@ -4,6 +4,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import org.junit.Assert.assertTrue
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.padding
@@ -415,19 +417,89 @@ class ScreenshotTest {
     @Test fun v30OpsSkipDark() = shotOps("skip", true)
 
     /** 预览汇总行可点 → 二级页；在二级页勾选会更新汇总。 */
-    @Test fun v30PreviewRowOpensSubpage() {
+    /** v0.3.5：「移动」格子改为筛选（不再跳子页）；再点一次取消；筛选不改勾选。子页路由仍可直接打开。 */
+    @Test fun v35PreviewMoveTileFilters() {
         seedLoggedIn()
         val plan = demoPreviewPlan()
+        val before = com.tamu.pan123.data.scrape.PlanSelection.selectedIds(plan)
         rule.setContent {
             IosTheme(false) {
                 val nav = rememberNavController()
                 NavHost(nav, startDestination = "p") {
                     composable("p") { com.tamu.pan123.ui.screens.PreviewScreen(nav, planOverride = plan) }
+                }
+            }
+        }
+        val moves = plan.actions.count { com.tamu.pan123.data.scrape.PreviewFilter.opMatches(it, "move") }
+        rule.onNode(hasContentDescription("移动，", substring = true)).performClick()
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodesWithText("正在筛选：移动 · $moves 项").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(rule.onAllNodesWithText("Season 1", substring = true).fetchSemanticsNodes().isNotEmpty())
+        assertTrue(rule.onAllNodesWithText("执行 (${before.size})").fetchSemanticsNodes().isNotEmpty())
+        rule.onNode(hasContentDescription("移动，", substring = true)).performClick()
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodesWithText("正在筛选：", substring = true).fetchSemanticsNodes().isEmpty())
+    }
+
+    /** v0.3.5：点片名那一行展开 / 收起（默认展开第一组）；未匹配 / 跳过时操作格子不可点。 */
+    @Test fun v35PreviewCollapseAndStatus() {
+        seedLoggedIn()
+        val plan = demoPreviewPlan()
+        rule.setContent {
+            IosTheme(false) {
+                val nav = rememberNavController()
+                NavHost(nav, startDestination = "p") { composable("p") { com.tamu.pan123.ui.screens.PreviewScreen(nav, planOverride = plan) } }
+            }
+        }
+        val sd = androidx.compose.ui.semantics.SemanticsProperties.StateDescription
+        val open = androidx.compose.ui.test.SemanticsMatcher.expectValue(sd, "已展开")
+        val closed = androidx.compose.ui.test.SemanticsMatcher.expectValue(sd, "已收起")
+        assertTrue(rule.onAllNodes(open).fetchSemanticsNodes().size == 1)
+        val nClosed = rule.onAllNodes(closed).fetchSemanticsNodes().size
+        rule.onAllNodes(open)[0].performClick()
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodes(open).fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodes(closed).fetchSemanticsNodes().size >= maxOf(1, nClosed))  // 懒加载：收起后可能露出更多分组
+        // 选「未匹配」：下排变灰（不可点），提示条出现
+        val un = com.tamu.pan123.data.scrape.PreviewFilter.statusCount(plan, com.tamu.pan123.data.scrape.PreviewFilter.Status.UNMATCHED)
+        rule.onNodeWithText("未匹配 $un").performClick()
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodesWithText("正在筛选：未匹配", substring = true).fetchSemanticsNodes().isNotEmpty())
+        rule.onNode(hasContentDescription("移动，", substring = true)).assertIsNotEnabled()
+        rule.onNode(hasContentDescription("取消筛选")).performClick()
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodesWithText("正在筛选：", substring = true).fetchSemanticsNodes().isEmpty())
+        rule.onRoot().captureRoboImage("build/outputs/roborazzi/v35_preview_collapsed_light.png")
+    }
+
+    /** v0.3.5：设置页「账号与网络」在「刮削 · 命名」上面。 */
+    private fun shotSettings35(name: String, dark: Boolean) {
+        seedLoggedIn()
+        rule.setContent {
+            IosTheme(dark) {
+                val nav = rememberNavController()
+                NavHost(nav, startDestination = "s") { composable("s") { com.tamu.pan123.ui.screens.SettingsScreen(nav) } }
+            }
+        }
+        val acc = rule.onNodeWithText("账号与网络", substring = true).fetchSemanticsNode().boundsInRoot.top
+        val scr = rule.onNodeWithText("刮削 · 命名", substring = true).fetchSemanticsNode().boundsInRoot.top
+        assertTrue("账号与网络应在刮削 · 命名上面", acc < scr)
+        rule.onRoot().captureRoboImage("build/outputs/roborazzi/$name.png")
+    }
+    @Config(qualifiers = "w411dp-h1300dp-xhdpi") @Test fun v35SettingsLight() = shotSettings35("v35_settings_light", false)
+    @Config(qualifiers = "w411dp-h1300dp-xhdpi") @Test fun v35SettingsDark() = shotSettings35("v35_settings_dark", true)
+
+    @Test fun v30PreviewOpsSubpageStillOpens() {
+        seedLoggedIn()
+        val plan = demoPreviewPlan()
+        rule.setContent {
+            IosTheme(false) {
+                val nav = rememberNavController()
+                NavHost(nav, startDestination = "scrape/preview/ops/move") {
                     composable("scrape/preview/ops/{type}") { e -> com.tamu.pan123.ui.screens.PreviewOpsScreen(nav, e.arguments?.getString("type")!!, plan) }
                 }
             }
         }
-        rule.onNodeWithText("移动").performClick()
         rule.waitForIdle()
         assertTrue(rule.onAllNodesWithText("全不选").fetchSemanticsNodes().isNotEmpty())
         assertTrue(rule.onAllNodesWithText("Season 1/", substring = true).fetchSemanticsNodes().isNotEmpty())

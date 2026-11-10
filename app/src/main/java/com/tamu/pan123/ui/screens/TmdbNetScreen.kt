@@ -99,7 +99,7 @@ fun TmdbNetScreen(nav: NavHostController) {
                     modifier = Modifier.fillMaxWidth().padding(12.dp, 4.dp, 12.dp, 4.dp), colors = fieldColors)
                 Row(Modifier.fillMaxWidth().padding(12.dp, 0.dp, 12.dp, 12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     listOf("填入 wsrv.nl" to "https://wsrv.nl/?url=", "填入 img.amodb.dev" to "https://img.amodb.dev", "清空" to "").forEach { (label, v) ->
-                        Text(label, style = IosType.callout, color = c.blue, modifier = Modifier.pressable { imageFb = v }.padding(vertical = 6.dp))
+                        Text(label, style = IosType.callout, color = c.link, modifier = Modifier.pressable { imageFb = v }.padding(vertical = 6.dp))
                     }
                 }
             }
@@ -134,7 +134,7 @@ fun TmdbNetScreen(nav: NavHostController) {
             GroupedSection(footer = testMsg) {
                 IosRow(
                     if (testing) "正在连接 TMDB…" else "测试 TMDB 连接",
-                    icon = Icons.Rounded.NetworkCheck, iconTint = c.blue, titleColor = c.blue, showDivider = false,
+                    icon = Icons.Rounded.NetworkCheck, iconTint = c.blue, titleColor = c.link, showDivider = false,
                 ) {
                     if (testing) return@IosRow
                     save()

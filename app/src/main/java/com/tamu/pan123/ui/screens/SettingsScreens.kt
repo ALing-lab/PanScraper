@@ -44,7 +44,8 @@ fun SettingsScreen(nav: NavHostController) {
             IosRow("安全存储不可用", subtitle = SecureStore.UNAVAILABLE_MESSAGE, icon = Icons.Rounded.GppBad,
                 iconTint = c.red, titleColor = c.red, showDivider = false)
         }
-        section("account", header = "账号") {
+        // 方案 I：「账号与网络」放在「刮削 · 命名」上面
+        section("account", header = "账号与网络", footer = "大陆网络连不上 TMDB 时，在「TMDB 网络」里换备用地址、开 DoH 或设置 TMDB 专用代理。") {
             IosRow(
                 "资源中心",
                 subtitle = "网盘账号（123 / 115 / 光鸭 / WebDAV）· TMDB 密钥",
@@ -52,8 +53,22 @@ fun SettingsScreen(nav: NavHostController) {
                 iconTint = c.blue,
                 value = accountValue,
                 chevron = true,
-                showDivider = false,
             ) { nav.navigate("settings/account") }
+            val net by com.tamu.pan123.data.tmdb.TmdbNet.config.collectAsState()
+            IosRow(
+                "TMDB 网络",
+                subtitle = com.tamu.pan123.data.tmdb.TmdbNet.describe(net),
+                icon = Icons.Rounded.Public,
+                iconTint = c.teal,
+                chevron = true,
+                showDivider = false,
+            ) { nav.navigate("settings/tmdb-net") }
+        }
+        section("scrape", header = "刮削 · 命名", footer = "两个命名开关只影响之后的扫描 / 重新匹配；已经生成的预览需要重新扫描才会变。文件夹命名不受影响；字幕等同名文件跟随视频的新名字（保留 .zh 等语言后缀），播放器仍能自动配对。") {
+            NamingRows()
+            val histOn by com.tamu.pan123.data.history.HistoryStore.enabled.collectAsState()
+            IosRow("历史记录", subtitle = if (histOn) "已开启：整理过的文件夹下次扫描时跳过" else "已关闭",
+                icon = Icons.Rounded.History, iconTint = c.blue, chevron = true, showDivider = false) { nav.navigate("settings/history") }
         }
         section("appearance", header = "外观", footer = "选择「跟随系统」时，会随系统的浅色/深色模式自动切换。") {
             IosSegmented(
@@ -70,23 +85,6 @@ fun SettingsScreen(nav: NavHostController) {
                 chevron = true,
                 showDivider = false,
             ) { nav.navigate("settings/data") }
-        }
-        section("scrape", header = "刮削", footer = "两个命名开关只影响之后的扫描 / 重新匹配；已经生成的预览需要重新扫描才会变。文件夹命名不受影响；字幕等同名文件跟随视频的新名字（保留 .zh 等语言后缀），播放器仍能自动配对。") {
-            NamingRows()
-            val histOn by com.tamu.pan123.data.history.HistoryStore.enabled.collectAsState()
-            IosRow("历史记录", subtitle = if (histOn) "已开启：整理过的文件夹下次扫描时跳过" else "已关闭",
-                icon = Icons.Rounded.History, iconTint = c.blue, chevron = true, showDivider = false) { nav.navigate("settings/history") }
-        }
-        section("tmdbnet", header = "TMDB", footer = "大陆网络连不上 TMDB 时，在这里换备用地址、开 DoH 或设置 TMDB 专用代理。") {
-            val net by com.tamu.pan123.data.tmdb.TmdbNet.config.collectAsState()
-            IosRow(
-                "TMDB 网络",
-                subtitle = com.tamu.pan123.data.tmdb.TmdbNet.describe(net),
-                icon = Icons.Rounded.Public,
-                iconTint = c.teal,
-                chevron = true,
-                showDivider = false,
-            ) { nav.navigate("settings/tmdb-net") }
         }
         section(
             "diag", header = "诊断",

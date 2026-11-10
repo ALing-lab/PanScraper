@@ -13,6 +13,7 @@ class App : Application(), coil.ImageLoaderFactory {
         // 最先装崩溃记录（之后的初始化出错也能记下来）；目录和 AppDirs.logs 相同
         CrashReporter.install(java.io.File(getExternalFilesDir(null) ?: filesDir, "logs"))
         Settings.init(this)
+        com.tamu.pan123.ui.theme.AppFonts.init(this)
         SecureStore.init(this)
         AppDirs.init(this)
         com.tamu.pan123.data.net.NetLog.dir = AppDirs.logs

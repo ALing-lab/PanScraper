@@ -47,7 +47,7 @@ fun IosAlert(
                     Box(
                         Modifier.weight(1f).fillMaxHeight().pressable(onClick = onDismiss),
                         contentAlignment = Alignment.Center,
-                    ) { Text(cancel, style = IosType.body, color = c.blue) }
+                    ) { Text(cancel, style = IosType.body, color = c.link) }
                     Box(Modifier.width(0.5.dp).fillMaxHeight().background(c.separator))
                     Box(
                         Modifier.weight(1f).fillMaxHeight().pressable(onClick = onConfirm),
@@ -56,7 +56,7 @@ fun IosAlert(
                         Text(
                             confirm,
                             style = IosType.headline,
-                            color = if (destructive) c.red else c.blue,
+                            color = if (destructive) c.red else c.link,
                         )
                     }
                 }

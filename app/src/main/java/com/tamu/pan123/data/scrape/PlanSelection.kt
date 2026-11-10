@@ -85,12 +85,12 @@ object PlanSelection {
         val set = ids.toSet()
         val a = plan.actions.filter { it.id in set }
         val parts = listOf(
-            "改名" to a.count { it.op == "rename" },
-            "新建文件夹" to a.count { it.op == "mkdir" && it.kind != "cleanup" },
+            "命名" to a.count { it.op == "rename" },
+            "新建" to a.count { it.op == "mkdir" && it.kind != "cleanup" },
             "移动" to a.count { it.op == "move" && it.kind != "cleanup" },
-            "海报/NFO" to a.count { it.op == "artwork" },
-            "清理旧文件" to a.count { it.kind == "cleanup" && it.op == "move" },
-            "删除多余文件夹" to a.count { it.op == "delete" },
+            "海报" to a.count { it.op == "artwork" },
+            "清理" to a.count { it.kind == "cleanup" && it.op == "move" },
+            "删除" to a.count { it.op == "delete" },
         ).filter { it.second > 0 }
         return parts.joinToString(" · ") { "${it.first} ${it.second}" }
     }

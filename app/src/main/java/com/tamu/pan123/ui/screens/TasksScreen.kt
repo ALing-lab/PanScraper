@@ -93,7 +93,7 @@ fun TasksScreen(nav: NavHostController) {
             else -> r.status
         }
         val statusColor = when (r.status) {
-            TaskRun.STATUS_RUNNING -> c.blue
+            TaskRun.STATUS_RUNNING -> c.link
             TaskRun.STATUS_PAUSED -> c.orange
             TaskRun.STATUS_DONE -> if (r.fail == 0) c.green else c.orange
             else -> c.secondaryLabel

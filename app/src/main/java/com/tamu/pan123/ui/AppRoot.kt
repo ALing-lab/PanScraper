@@ -25,6 +25,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -116,8 +119,8 @@ fun AppRoot(initialTab: Tab = Tab.CLOUD) {
                     }
                 }
             } else {
-                val barH = 49.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-                CompositionLocalProvider(LocalBottomInset provides 49.dp) {
+                val barH = 56.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                CompositionLocalProvider(LocalBottomInset provides 56.dp) {
                     Box(Modifier.fillMaxSize()) {
                         Crossfade(tab, animationSpec = tween(220), label = "tab") { t: Tab -> TabHost(t, controllers[t]!!) }
                         TabBar(tab, Modifier.align(Alignment.BottomCenter).height(barH),
@@ -208,17 +211,24 @@ private fun TabBar(selected: Tab, modifier: Modifier = Modifier, onSelect: (Tab)
     val c = Ios.colors
     Column(modifier.fillMaxWidth().background(c.barBg)) {
         Box(Modifier.fillMaxWidth().height(0.5.dp).background(c.separator))
-        Row(Modifier.fillMaxWidth().height(49.dp)) {
+        Row(Modifier.fillMaxWidth().height(56.dp)) {
             Tab.entries.forEach { t ->
-                val tint by animateColorAsState(if (t == selected) c.blue else c.gray, label = "tabtint")
+                // 方案 I：选中的图标是应用图标的橙，背后一块胶囊；文字不用橙（浅色下读不清），选中用正文色加粗
+                val sel = t == selected
+                val tint by animateColorAsState(if (sel) c.accent else c.secondaryLabel, label = "tabtint")
+                val pill by animateColorAsState(if (sel) c.elevated else Color.Transparent, label = "tabpill")
                 Column(
                     Modifier.weight(1f).fillMaxHeight()
+                        .semantics { this.selected = sel; role = androidx.compose.ui.semantics.Role.Tab }
                         .clickable(remember { MutableInteractionSource() }, null) { onSelect(t) },
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
                 ) {
-                    Icon(t.icon, t.label, tint = tint, modifier = Modifier.size(26.dp))
+                    Box(Modifier.size(56.dp, 30.dp).clip(RoundedCornerShape(15.dp)).background(pill), contentAlignment = Alignment.Center) {
+                        Icon(t.icon, t.label, tint = tint, modifier = Modifier.size(24.dp))
+                    }
                     Spacer(Modifier.height(2.dp))
-                    Text(t.label, style = IosType.tab, color = tint)
+                    Text(t.label, style = IosType.tab.copy(fontWeight = if (sel) androidx.compose.ui.text.font.FontWeight.SemiBold else androidx.compose.ui.text.font.FontWeight.Medium),
+                        color = if (sel) c.label else c.secondaryLabel)
                 }
             }
         }
@@ -231,23 +241,23 @@ private fun TabBar(selected: Tab, modifier: Modifier = Modifier, onSelect: (Tab)
 private fun Sidebar(selected: Tab, onSelect: (Tab) -> Unit) {
     val c = Ios.colors
     Column(
-        Modifier.width(300.dp).fillMaxHeight().background(if (c.dark) Color(0xFF1C1C1E) else Color(0xFFF2F2F7))
+        Modifier.width(300.dp).fillMaxHeight().background(c.cell)
             .windowInsetsPadding(WindowInsets.statusBars).padding(horizontal = 12.dp)
     ) {
         Spacer(Modifier.height(16.dp))
         Text(com.tamu.pan123.AppInfo.NAME, style = IosType.largeTitle, color = c.label, modifier = Modifier.padding(start = 8.dp, bottom = 16.dp))
         Tab.entries.forEach { t ->
             val sel = t == selected
-            val bg by animateColorAsState(if (sel) c.blue else Color.Transparent, label = "sbbg")
+            val bg by animateColorAsState(if (sel) c.accent else Color.Transparent, label = "sbbg")
             Row(
-                Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(RoundedCornerShape(10.dp)).background(bg)
+                Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(RoundedCornerShape(16.dp)).background(bg)
                     .clickable(remember { MutableInteractionSource() }, null) { onSelect(t) }
                     .padding(horizontal = 12.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(t.icon, null, tint = if (sel) Color.White else c.blue, modifier = Modifier.size(24.dp))
+                Icon(t.icon, null, tint = if (sel) c.onAccent else c.accent, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(12.dp))
-                Text(t.label, style = IosType.body, color = if (sel) Color.White else c.label)
+                Text(t.label, style = IosType.body, color = if (sel) c.onAccent else c.label)
             }
         }
     }

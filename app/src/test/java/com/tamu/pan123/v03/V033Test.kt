@@ -42,7 +42,8 @@ class V033Test {
         assertTrue(gpl.contains("GNU GENERAL PUBLIC LICENSE") && gpl.contains("END OF TERMS AND CONDITIONS"))
         // 所有依赖都是 GPL-3.0 兼容许可，且全文都在
         for (l in OSS_LIBS.drop(1)) {
-            assertTrue(l.license, l.license.startsWith("Apache License 2.0") || l.license.startsWith("MIT"))
+            // v0.3.5 起内置字体（Mona Sans / Geist Mono / Noto Sans SC）为 SIL OFL 1.1，可与 GPL 程序一起分发
+            assertTrue(l.license, l.license.startsWith("Apache License 2.0") || l.license.startsWith("MIT") || l.license.startsWith("SIL Open Font License 1.1"))
             assertTrue(l.file, app.assets.open("licenses/${l.file}").bufferedReader().readText().length > 500)
         }
     }

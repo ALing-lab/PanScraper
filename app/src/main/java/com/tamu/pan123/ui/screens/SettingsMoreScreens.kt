@@ -290,7 +290,7 @@ fun UpdateCard(result: UpdateResult, onDismiss: () -> Unit, onManual: () -> Unit
         @Composable fun btn(text: String, bold: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
             Box(Modifier.fillMaxWidth().height(0.5.dp).background(c.separator))
             Box(Modifier.fillMaxWidth().height(44.dp).pressable(onClick = { if (enabled) onClick() }), contentAlignment = Alignment.Center) {
-                Text(text, style = if (bold) IosType.headline else IosType.body, color = if (enabled) c.blue else c.tertiaryLabel)
+                Text(text, style = if (bold) IosType.headline else IosType.body, color = if (enabled) c.link else c.tertiaryLabel)
             }
         }
         if (result is UpdateResult.Available) {
@@ -353,13 +353,16 @@ val OSS_LIBS = listOf(
     OssLib("Guava ListenableFuture", "com.google.guava:listenablefuture", "Apache License 2.0", "apache-2.0.txt", "https://github.com/google/guava"),
     OssLib("Accompanist Drawable Painter", "com.google.accompanist（Coil 依赖）", "Apache License 2.0", "apache-2.0.txt", "https://github.com/google/accompanist"),
     OssLib("JetBrains Annotations", "org.jetbrains:annotations", "Apache License 2.0", "apache-2.0.txt", "https://github.com/JetBrains/java-annotations"),
+    OssLib("Mona Sans（字体）", "res/font/mona_sans.ttf", "SIL Open Font License 1.1", "ofl-mona-sans.txt", "https://github.com/github/mona-sans"),
+    OssLib("Geist Mono（字体）", "res/font/geist_mono.ttf", "SIL Open Font License 1.1", "ofl-geist-mono.txt", "https://github.com/vercel/geist-font"),
+    OssLib("Noto Sans CJK SC（字体，常用字子集）", "res/font/noto_sans_sc_*.otf", "SIL Open Font License 1.1", "ofl-noto-sans-sc.txt", "https://github.com/notofonts/noto-cjk"),
 )
 
 
 @Composable
 fun LicensesScreen(nav: NavHostController) {
     LargeTitlePage("开源许可", onBack = { nav.popBackStack() }, backLabel = "关于") {
-        section("libs", footer = "${AppInfo.NAME} 以 GNU GPL v3.0 开源（Copyright (C) 2026 ${AppInfo.AUTHOR}）；所用依赖均为 Apache-2.0 / MIT 等与 GPL-3.0 兼容的许可。点一项查看许可证全文。TMDB 数据与图片版权归 TMDB 及其贡献者所有。") {
+        section("libs", footer = "${AppInfo.NAME} 以 GNU GPL v3.0 开源（Copyright (C) 2026 ${AppInfo.AUTHOR}）；所用依赖均为 Apache-2.0 / MIT 等与 GPL-3.0 兼容的许可；内置字体为 SIL OFL 1.1。点一项查看许可证全文。TMDB 数据与图片版权归 TMDB 及其贡献者所有。") {
             OSS_LIBS.forEachIndexed { i, l ->
                 IosRow(l.name, subtitle = "${l.license} · ${l.artifact}", chevron = true, showDivider = i < OSS_LIBS.lastIndex) {
                     nav.navigate("settings/licenses/$i")

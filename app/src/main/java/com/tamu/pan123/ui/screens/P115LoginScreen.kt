@@ -122,13 +122,13 @@ fun P115LoginScreen(nav: NavHostController, targetId: String?, preview: Boolean 
             Spacer(Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
             Box(Modifier.fillMaxWidth().height(44.dp)) {
                 Text(
-                    "取消", style = IosType.body, color = c.blue,
+                    "取消", style = IosType.body, color = c.link,
                     modifier = Modifier.align(Alignment.CenterStart).padding(start = 14.dp)
                         .pressable { nav.popBackStack() }.padding(8.dp),
                 )
                 Text("115 扫码登录", style = IosType.headline, color = c.label, modifier = Modifier.align(Alignment.Center))
                 Text(
-                    "刷新", style = IosType.body, color = c.blue,
+                    "刷新", style = IosType.body, color = c.link,
                     modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp)
                         .pressable { if (!busy) refresh() }.padding(8.dp),
                 )

@@ -39,8 +39,8 @@ import kotlinx.coroutines.launch
 
 /** 预览的分类：汇总行点进来的二级页面。 */
 val PREVIEW_OP_TYPES = listOf(
-    "rename" to "改名", "mkdir" to "建文件夹", "move" to "移动", "artwork" to "海报/NFO",
-    "cleanup" to "清理旧文件", "delete" to "删除多余文件夹", "skip" to "跳过", "unmatched" to "未匹配",
+    "rename" to "命名", "mkdir" to "新建", "move" to "移动", "artwork" to "海报",
+    "cleanup" to "清理", "delete" to "删除", "skip" to "跳过", "unmatched" to "未匹配",
 )
 
 /** 已经执行成功的项不再出现在预览里（v0.3：执行后预览只剩未执行的）。 */

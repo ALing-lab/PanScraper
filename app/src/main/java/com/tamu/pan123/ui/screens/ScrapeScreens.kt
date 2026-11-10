@@ -18,6 +18,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.animation.core.animateFloatAsState
+import com.tamu.pan123.data.scrape.PreviewFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -135,7 +148,7 @@ fun ScrapeScreen(nav: NavHostController) {
                 StatusNote("扫描失败：${progress.error ?: "未知错误"}", c.red,
                     if (tmdbErr) "TMDB 连不上时：开启代理，或到「设置 › TMDB 网络」改用备用地址 / DoH / 代理，测试通过后再扫描。"
                     else "可以直接再点「开始扫描」重试；如果反复失败，请在「设置 › 调试日志」导出日志发给开发者。")
-                if (tmdbErr) Text("打开 TMDB 网络设置", style = IosType.footnote, color = c.blue,
+                if (tmdbErr) Text("打开 TMDB 网络设置", style = IosType.footnote, color = c.link,
                     modifier = Modifier.padding(horizontal = 32.dp, vertical = 6.dp).pressable { nav.navigate("settings/tmdb-net") })
             }
             if (!scanning && progress.phase == "cancelled") item {
@@ -152,9 +165,10 @@ fun ScrapeScreen(nav: NavHostController) {
 
         if (summary != null) {
             section("last", header = "最近一次计划", footer = summary!!.createdAt) {
-                IosRow("分组", value = "${summary!!.groups}")
-                IosRow("操作项", value = "${summary!!.actions}")
-                IosRow("未匹配", value = "${summary!!.unmatched}")
+                // 方案 I：数字带单位（影片 / 剧集按「部」，操作按「项」）
+                IosRow("分组", value = "${summary!!.groups} 部")
+                IosRow("操作项", value = "${summary!!.actions} 项")
+                IosRow("未匹配", value = "${summary!!.unmatched} 项")
                 IosRow("查看预览", icon = Icons.Rounded.FactCheck, iconTint = c.blue, chevron = true, showDivider = false) {
                     nav.navigate("scrape/preview")
                 }
@@ -168,18 +182,6 @@ fun ScrapeScreen(nav: NavHostController) {
 
 internal val planWriteLock = kotlinx.coroutines.sync.Mutex()
 
-private val PREVIEW_FILTERS = listOf(
-    "all" to "全部", "rename" to "改名", "mkdir" to "建文件夹", "move" to "移动",
-    "artwork" to "海报/NFO", "cleanup" to "清理旧文件", "failed" to "仅失败",
-)
-
-private fun visibleOp(a: PlanAction, filter: String): Boolean = when (filter) {
-    "all" -> a.op in setOf("rename", "mkdir", "move", "artwork", "unmatched")
-    "cleanup" -> a.kind == "cleanup"
-    "failed" -> a.error != null
-    else -> a.op == filter && a.kind != "cleanup"
-}
-
 @Composable
 fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
     val c = Ios.colors
@@ -188,10 +190,10 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
     val notif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     var plan by remember { mutableStateOf(planOverride) }
     var loadErr by remember { mutableStateOf<String?>(null) }
-    var filter by remember { mutableStateOf("all") }
-    var folderFilter by remember { mutableStateOf<String?>(null) }
-    var folderMenu by remember { mutableStateOf(false) }
-    var expanded by remember { mutableStateOf(setOf<String>()) }
+    // 方案 I：上排状态 + 下排操作两排筛选（见 PreviewFilter）；筛选只影响显示，不改勾选
+    var fst by remember { mutableStateOf(PreviewFilter.State()) }
+    // 展开的分组；null = 还没动过 → 默认展开第一组
+    var expanded by remember { mutableStateOf<Set<String>?>(null) }
     var confirmIds by remember { mutableStateOf<List<String>?>(null) }
     var execMsg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -208,11 +210,12 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
         }
     }
     val p = plan
-    val visibleFilter: (PlanAction) -> Boolean = { a ->
-        visibleOp(a, filter) && (folderFilter == null || a.groupId == folderFilter)
-    }
     val selectedIds = p?.let { com.tamu.pan123.data.scrape.PlanSelection.selectedIds(it) }.orEmpty()
-    val visibleExec = p?.actions?.filter { visibleFilter(it) && com.tamu.pan123.data.scrape.PlanSelection.executable(it) }.orEmpty()
+    // 「全选」作用于当前显示的项；不筛操作时与原来一样不含可选的清理 / 删除
+    val visibleExec = p?.actions?.filter {
+        PreviewFilter.matches(it, fst) && com.tamu.pan123.data.scrape.PlanSelection.executable(it) &&
+            (fst.op != null || (it.kind != "cleanup" && it.op != "delete"))
+    }.orEmpty()
     val allOn = visibleExec.isNotEmpty() && visibleExec.all { it.selected }
     LargeTitlePage(
         "预刮削预览",
@@ -238,44 +241,55 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
                 CircularProgressIndicator(color = c.blue, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
             } }
         } else {
-            item {
-                GroupedSection(footer = "点每一类查看具体内容（按文件夹分组，可勾选）；点下面的分组可重新匹配 TMDB。勾选好后点右上角「执行」。") {
-                    val rows = PREVIEW_OP_TYPES.filter { (k, _) -> k !in setOf("cleanup", "delete") || p.actions.any { previewOpMatches(it, k) } }
-                    rows.forEachIndexed { i, (key, label) ->
-                        val total = p.actions.count { previewOpMatches(it, key) }
-                        val exec = p.actions.filter { previewOpMatches(it, key) && com.tamu.pan123.data.scrape.PlanSelection.executable(it) }
-                        val value = if (exec.isEmpty()) "$total" else "${exec.count { it.selected }}/$total"
-                        IosRow(when (key) { "cleanup" -> "清理旧文件（可选）"; "delete" -> "删除多余文件夹（可选）"; else -> label }, value = value, chevron = true,
-                            titleColor = if (key == "unmatched" && total > 0) c.orange else null,
-                            showDivider = i < rows.lastIndex) { nav.navigate("scrape/preview/ops/$key") }
-                    }
+            item(key = "status") {
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    IosSegmented(
+                        PreviewFilter.Status.entries.toList(), fst.status,
+                        { "${it.label} ${PreviewFilter.statusCount(p, it)}" },
+                        { fst = PreviewFilter.selectStatus(fst, it) },
+                        Modifier.fillMaxWidth(),
+                    )
                 }
+            }
+            item(key = "ops") {
+                OpTiles(p, fst) { fst = PreviewFilter.toggleOp(fst, it) }
+            }
+            PreviewFilter.chipText(p, fst)?.let { chip ->
+                item(key = "chip") { FilterChip(chip) { fst = PreviewFilter.clear() } }
             }
             if (execMsg != null) item {
                 Text(execMsg!!, style = IosType.footnote, color = c.red, modifier = Modifier.padding(horizontal = 32.dp, vertical = 4.dp))
             }
             // 扫描时因为文件太多被截断的文件夹：明确告诉用户
             val truncated = p.flags.filter { it.contains("只扫描了前") }
-            if (truncated.isNotEmpty()) item(key = "truncated") {
+            if (truncated.isNotEmpty() && !fst.active) item(key = "truncated") {
                 GroupedSection(footer = truncated.joinToString("\n")) {
                     IosRow("有文件夹没有扫描完", icon = Icons.Rounded.Warning, iconTint = c.orange, titleColor = c.orange, showDivider = false)
                 }
             }
             // v0.3：执行成功的分组从预览里移除，只剩还没执行的
-            val shownGroups = p.groups.filter { g -> p.actions.none { it.groupId == g.id } || p.actions.any { it.groupId == g.id && !it.done } }
-            val doneGroups = p.groups.size - shownGroups.size
+            val shownIds = PreviewFilter.visibleGroupIds(p, fst)
+            val byId = p.groups.associateBy { it.id }
+            val unfiltered = if (fst.active) PreviewFilter.visibleGroupIds(p, PreviewFilter.State()) else shownIds
+            val doneGroups = p.groups.size - unfiltered.size
             val doneActs = p.actions.count { it.done }
-            if (doneActs > 0 || p.stats.history > 0) item {
+            if (!fst.active && (doneActs > 0 || p.stats.history > 0)) item {
                 Text(buildString {
                     if (doneActs > 0) append("已执行成功的 $doneActs 项" + (if (doneGroups > 0) "（$doneGroups 组全部完成）" else "") + "已从预览移除，下面只剩未执行的。")
                     if (p.stats.history > 0) append("历史记录里整理过的 ${p.stats.history} 个文件夹已跳过。")
                 }, style = IosType.footnote, color = c.secondaryLabel, modifier = Modifier.padding(horizontal = 32.dp, vertical = 4.dp))
             }
-            if (shownGroups.isEmpty()) item {
-                Text(if (p.groups.isNotEmpty()) "全部执行完成，没有剩余操作" else "没有分组", style = IosType.footnote, color = c.secondaryLabel,
+            if (shownIds.isEmpty()) item {
+                Text(when {
+                    fst.active -> "没有符合筛选的项"
+                    p.groups.isNotEmpty() -> "全部执行完成，没有剩余操作"
+                    else -> "没有分组"
+                }, style = IosType.footnote, color = c.secondaryLabel,
                     modifier = Modifier.padding(horizontal = 32.dp, vertical = 12.dp))
             }
-            shownGroups.forEach { g ->
+            val open = expanded ?: setOfNotNull(shownIds.firstOrNull())
+            shownIds.forEach { gid ->
+                val g = byId[gid] ?: return@forEach
                 section("g-${g.id}", header = when (g.kind) {
                     "tv" -> "剧集"
                     "movie" -> "电影"
@@ -283,21 +297,26 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
                     else -> "未匹配"
                 }) {
                     val tri = com.tamu.pan123.data.scrape.PlanSelection.groupState(p, g.id)
-                    GroupHeader(g, tri,
+                    val isOpen = g.id in open
+                    GroupHeader(g, tri, isOpen, PreviewFilter.groupSummary(p, g.id, fst),
                         onToggle = {
                             val ids = p.actions.filter { it.groupId == g.id && com.tamu.pan123.data.scrape.PlanSelection.executable(it) && it.kind != "cleanup" }.map { it.id }
                                 .ifEmpty { p.actions.filter { it.groupId == g.id && com.tamu.pan123.data.scrape.PlanSelection.executable(it) }.map { it.id } }
                             commit(com.tamu.pan123.data.scrape.PlanSelection.set(p, ids, tri != com.tamu.pan123.data.scrape.PlanSelection.Tri.ALL))
                         },
+                        onExpand = { expanded = if (isOpen) open - g.id else open + g.id },
                     ) { nav.navigate("scrape/rematch/${g.id}") }
-                    val counts = PREVIEW_OP_TYPES.mapNotNull { (k, label) ->
-                        p.actions.count { it.groupId == g.id && previewOpMatches(it, k) }.takeIf { it > 0 }?.let { "$label $it" }
+                    if (isOpen) {
+                        val acts = p.actions.filter { it.groupId == g.id && PreviewFilter.matches(it, fst) }
+                        acts.forEachIndexed { i, a ->
+                            ActionRow(a, showDivider = i < acts.lastIndex) {
+                                commit(com.tamu.pan123.data.scrape.PlanSelection.set(p, listOf(a.id), !a.selected))
+                            }
+                        }
                     }
-                    if (counts.isNotEmpty()) Text(counts.joinToString(" · "), style = IosType.footnote, color = c.secondaryLabel,
-                        modifier = Modifier.padding(start = 48.dp, end = 16.dp, bottom = 12.dp))
                 }
             }
-            if (p.flags.isNotEmpty() && folderFilter == null) {
+            if (p.flags.isNotEmpty() && !fst.active) {
                 section("flags", header = "需要留意") {
                     p.flags.take(30).forEachIndexed { i, f ->
                         IosRow(f, showDivider = i < minOf(29, p.flags.size - 1))
@@ -332,80 +351,149 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
     }
 }
 
-/** iOS 风格圆形勾选：实心蓝勾 / 部分（横线）/ 空圈。 */
+/** 勾选（方案 I 的圆角方块，见 [AccentCheck]）：全选 / 部分（横线）/ 未选；EMPTY 或 enabled=false 显示为灰框。 */
 @Composable
 internal fun CheckCircle(state: com.tamu.pan123.data.scrape.PlanSelection.Tri, enabled: Boolean = true, onClick: () -> Unit) {
+    AccentCheck(
+        checked = state == com.tamu.pan123.data.scrape.PlanSelection.Tri.ALL,
+        partial = state == com.tamu.pan123.data.scrape.PlanSelection.Tri.SOME,
+        enabled = enabled && state != com.tamu.pan123.data.scrape.PlanSelection.Tri.EMPTY,
+        onClick = onClick,
+    )
+}
+
+/** 下排操作格子：命名 / 新建 / 移动 / 海报 / 清理（有删除时再加删除），显示「已选/总数」；未匹配 / 跳过时变灰。 */
+@Composable
+private fun OpTiles(p: ScrapePlan, st: PreviewFilter.State, onTap: (String) -> Unit) {
     val c = Ios.colors
-    Box(
-        Modifier.size(44.dp).pressable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
+    val enabled = PreviewFilter.opsEnabled(st.status)
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f },
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val filled = state == com.tamu.pan123.data.scrape.PlanSelection.Tri.ALL || state == com.tamu.pan123.data.scrape.PlanSelection.Tri.SOME
-        Box(
-            Modifier.size(24.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                .background(if (filled && enabled) c.blue else androidx.compose.ui.graphics.Color.Transparent)
-                .then(if (!filled) Modifier.border(1.5.dp, c.tertiaryLabel, androidx.compose.foundation.shape.CircleShape) else Modifier),
-            contentAlignment = Alignment.Center,
-        ) {
-            when (state) {
-                com.tamu.pan123.data.scrape.PlanSelection.Tri.ALL -> Icon(Icons.Rounded.Check, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(16.dp))
-                com.tamu.pan123.data.scrape.PlanSelection.Tri.SOME -> Icon(Icons.Rounded.Remove, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(16.dp))
-                else -> {}
+        PreviewFilter.tileOps(p).forEach { (key, label) ->
+            val sel = st.op == key
+            val n = PreviewFilter.opCount(p, key)
+            val shape = RoundedCornerShape(16.dp)
+            Column(
+                Modifier.weight(1f).heightIn(min = 64.dp).clip(shape)
+                    .background(if (sel) c.accentTint else c.cell)
+                    .border(if (sel) 1.5.dp else 1.dp, if (sel) c.accent else c.hairline, shape)
+                    .semantics {
+                        selected = sel; role = Role.Tab
+                        if (!enabled) disabled()
+                        contentDescription = "$label，已选 ${n.selected}，共 ${n.total}"
+                    }
+                    .pressable(enabled = enabled) { onTap(key) }
+                    .padding(vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (sel) Icon(Icons.Rounded.Check, null, tint = c.label, modifier = Modifier.size(14.dp).padding(end = 2.dp))
+                    Text(label, style = IosType.footnote.copy(fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium), color = c.label, maxLines = 1)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(n.label, style = IosType.footnote.copy(fontFamily = IosType.mono, fontSize = 13.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal),
+                    color = if (sel) c.label else c.secondaryLabel, maxLines = 1)
             }
         }
     }
 }
 
+/** 「正在筛选：… · N 项 ✕」：点 ✕ 取消全部筛选（回到「全部」）。 */
+@Composable
+private fun FilterChip(text: String, onClear: () -> Unit) {
+    val c = Ios.colors
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.clip(RoundedCornerShape(20.dp)).background(c.cell).border(1.dp, c.hairline, RoundedCornerShape(20.dp))
+                .padding(start = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text, style = IosType.footnote, color = c.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false))
+            Box(
+                Modifier.size(44.dp).semantics { contentDescription = "取消筛选"; role = Role.Button }.pressable(onClick = onClear),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Rounded.Close, null, tint = c.secondaryLabel, modifier = Modifier.size(18.dp)) }
+        }
+    }
+}
+
+/**
+ * 分组卡片的标题行：左边勾选整组；点片名那一行展开 / 收起（箭头旋转）；「重新匹配」是单独的按钮。
+ * 收起时片名下面显示「N 项 · 已选 M」这类摘要。
+ */
 @Composable
 private fun GroupHeader(
     g: PlanGroup,
     tri: com.tamu.pan123.data.scrape.PlanSelection.Tri,
+    expanded: Boolean,
+    summary: String,
     onToggle: () -> Unit,
+    onExpand: () -> Unit,
     onRematch: () -> Unit,
 ) {
     val c = Ios.colors
-    Row(
-        Modifier.fillMaxWidth().padding(start = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        CheckCircle(tri, enabled = tri != com.tamu.pan123.data.scrape.PlanSelection.Tri.EMPTY, onClick = onToggle)
-        Row(
-            Modifier.weight(1f).pressable(onClick = onRematch).padding(top = 12.dp, bottom = 12.dp, end = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val url = g.posterPath?.let { com.tamu.pan123.data.tmdb.TmdbNet.imageUrl("https://image.tmdb.org/t/p/w185$it") }
-            Box(Modifier.size(52.dp, 78.dp).clip(RoundedCornerShape(6.dp)).background(c.fill)) {
-                com.tamu.pan123.ui.components.TmdbImage(url, Modifier.fillMaxSize())
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    g.title.ifBlank { g.folderName }.ifBlank { "未命名" },
-                    style = IosType.headline, color = c.label, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                )
-                val sub = buildString {
-                    if (g.year.isNotBlank()) append(g.year)
-                    if (g.tmdbId != null) {
-                        if (isNotEmpty()) append(" · ")
-                        append(if (g.kind == "collection") "collection-${g.tmdbId}" else "tmdb-${g.tmdbId}")
-                    }
-                    if (g.confidence != null) {
-                        if (isNotEmpty()) append(" · ")
-                        append(if (g.confidence == "手动") "手动匹配" else "可信度 ${g.confidence}")
-                    }
-                    if (g.folderNewName != null) {
-                        if (isNotEmpty()) append("\n")
-                        append("→ ${g.folderNewName}")
-                    } else if (g.note != null) {
-                        if (isNotEmpty()) append("\n")
-                        append(g.note)
-                    }
+    val rot by animateFloatAsState(if (expanded) 0f else -90f, label = "chev")
+    Column {
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            CheckCircle(tri, enabled = tri != com.tamu.pan123.data.scrape.PlanSelection.Tri.EMPTY, onClick = onToggle)
+            Row(
+                Modifier.weight(1f)
+                    .semantics(mergeDescendants = true) { stateDescription = if (expanded) "已展开" else "已收起"; role = Role.Button }
+                    .pressable(onClick = onExpand).padding(top = 12.dp, bottom = 8.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val url = g.posterPath?.let { com.tamu.pan123.data.tmdb.TmdbNet.imageUrl("https://image.tmdb.org/t/p/w185$it") }
+                Box(Modifier.size(44.dp, 66.dp).clip(RoundedCornerShape(8.dp)).background(c.fill)) {
+                    com.tamu.pan123.ui.components.TmdbImage(url, Modifier.fillMaxSize())
                 }
-                if (sub.isNotBlank()) Text(sub, style = IosType.footnote, color = c.secondaryLabel, maxLines = 3)
-                g.warn?.let { Text("⚠ $it", style = IosType.caption, color = c.orange, maxLines = 2) }
-                Text("点此重新匹配", style = IosType.caption, color = c.blue)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        g.title.ifBlank { g.folderName }.ifBlank { "未命名" },
+                        style = IosType.headline, color = c.label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    )
+                    val sub = buildString {
+                        if (g.year.isNotBlank()) append(g.year)
+                        if (g.tmdbId != null) {
+                            if (isNotEmpty()) append(" · ")
+                            append(if (g.kind == "collection") "collection-${g.tmdbId}" else "tmdb-${g.tmdbId}")
+                        }
+                        if (g.confidence != null) {
+                            if (isNotEmpty()) append(" · ")
+                            append(if (g.confidence == "手动") "手动匹配" else "可信度 ${g.confidence}")
+                        }
+                        if (expanded) {
+                            if (g.folderNewName != null) {
+                                if (isNotEmpty()) append("\n")
+                                append("→ ${g.folderNewName}")
+                            } else if (g.note != null) {
+                                if (isNotEmpty()) append("\n")
+                                append(g.note)
+                            }
+                        }
+                    }
+                    if (sub.isNotBlank()) Text(sub, style = IosType.footnote, color = c.secondaryLabel, maxLines = 3)
+                    g.warn?.let { Text("⚠ $it", style = IosType.caption, color = c.orange, maxLines = 2) }
+                    if (!expanded) Text(summary, style = IosType.footnote.copy(fontWeight = FontWeight.Medium), color = c.label)
+                }
+                Icon(Icons.Rounded.KeyboardArrowDown, null, tint = c.secondaryLabel, modifier = Modifier.size(24.dp).rotate(rot))
             }
-            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = c.tertiaryLabel)
+        }
+        Row(Modifier.fillMaxWidth().padding(start = 48.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(22.dp))
+                    .semantics { role = Role.Button }.pressable(onClick = onRematch).padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.Refresh, null, tint = c.link, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("重新匹配", style = IosType.footnote.copy(fontWeight = FontWeight.Medium), color = c.link)
+            }
         }
     }
 }
@@ -417,10 +505,12 @@ private fun ActionRow(a: PlanAction, showDivider: Boolean, onToggle: () -> Unit)
     val title = when {
         cleanup && a.op == "mkdir" -> "清理 · 新建 ${a.newName}"
         cleanup -> "清理 · 移动"
-        a.op == "rename" -> if (a.kind == "folder") "改名（文件夹）" else "改名"
-        a.op == "mkdir" -> "新建文件夹"
+        a.op == "rename" -> if (a.kind == "folder") "命名（文件夹）" else "命名"
+        a.op == "mkdir" -> "新建"
         a.op == "move" -> "移动"
-        a.op == "artwork" -> "海报/NFO"
+        a.op == "artwork" -> "海报"
+        a.op == "delete" -> "删除"
+        a.op == "skip" -> "跳过"
         a.op == "unmatched" -> "未匹配"
         else -> a.op
     }

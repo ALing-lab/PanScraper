@@ -95,7 +95,7 @@ fun AccountCenterScreen(nav: NavHostController) {
                 "添加网盘账号",
                 icon = Icons.Rounded.Add,
                 iconTint = c.green,
-                titleColor = c.blue,
+                titleColor = c.link,
                 showDivider = false,
             ) { nav.navigate("settings/account/add") }
         }
@@ -260,7 +260,7 @@ fun WebDavFormScreen(nav: NavHostController) {
                         com.tamu.pan123.data.webdav.WebDavAddress.EXAMPLES.forEach { (name, ex) ->
                             Row(Modifier.fillMaxWidth().pressable { url = ex }.padding(vertical = 6.dp), verticalAlignment = Alignment.Top) {
                                 Text(name, style = IosType.footnote, color = c.secondaryLabel, modifier = Modifier.width(96.dp))
-                                Text(ex, style = IosType.footnote, color = c.blue, modifier = Modifier.weight(1f))
+                                Text(ex, style = IosType.footnote, color = c.link, modifier = Modifier.weight(1f))
                             }
                         }
                     }
@@ -285,7 +285,7 @@ fun WebDavFormScreen(nav: NavHostController) {
                     if (testing) "正在连接…" else "测试连接",
                     icon = Icons.Rounded.NetworkCheck,
                     iconTint = c.blue,
-                    titleColor = c.blue,
+                    titleColor = c.link,
                     showDivider = false,
                 ) {
                     if (!valid || testing) return@IosRow
@@ -352,7 +352,7 @@ fun DriveAccountScreen(nav: NavHostController, id: String) {
             IosRow(
                 "设为正在浏览",
                 value = if (acct.id == activeId) "是" else null,
-                titleColor = if (acct.id == activeId) null else c.blue,
+                titleColor = if (acct.id == activeId) null else c.link,
                 showDivider = false,
             ) { AccountStore.setActive(acct.id) }
         }
@@ -403,7 +403,7 @@ fun DriveAccountScreen(nav: NavHostController, id: String) {
                         if (busy) "正在连接…" else "测试连接",
                         icon = Icons.Rounded.NetworkCheck,
                         iconTint = c.blue,
-                        titleColor = c.blue,
+                        titleColor = c.link,
                         showDivider = false,
                     ) {
                         if (busy) return@IosRow
@@ -438,7 +438,7 @@ fun DriveAccountScreen(nav: NavHostController, id: String) {
                         if (busy) "正在连接…" else "测试连接",
                         icon = Icons.Rounded.NetworkCheck,
                         iconTint = c.blue,
-                        titleColor = c.blue,
+                        titleColor = c.link,
                         showDivider = false,
                     ) {
                         if (busy) return@IosRow
@@ -471,7 +471,7 @@ fun DriveAccountScreen(nav: NavHostController, id: String) {
                         if (busy) "正在连接…" else "测试连接",
                         icon = Icons.Rounded.NetworkCheck,
                         iconTint = c.blue,
-                        titleColor = c.blue,
+                        titleColor = c.link,
                         showDivider = false,
                     ) {
                         if (busy) return@IosRow

@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -31,6 +32,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -109,7 +117,7 @@ fun LargeTitlePage(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBackIos, null, tint = c.blue, modifier = Modifier.size(20.dp))
-                        Text(backLabel, style = IosType.body, color = c.blue, maxLines = 1)
+                        Text(backLabel, style = IosType.body, color = c.link, maxLines = 1)
                     }
                 }
                 Text(
@@ -129,7 +137,7 @@ fun BarButton(text: String, enabled: Boolean = true, bold: Boolean = false, onCl
     val c = Ios.colors
     Text(
         text, style = if (bold) IosType.headline else IosType.body,
-        color = if (enabled) c.blue else c.tertiaryLabel,
+        color = if (enabled) c.link else c.tertiaryLabel,
         modifier = Modifier.pressable(enabled = enabled, onClick = onClick).padding(horizontal = 8.dp, vertical = 8.dp),
     )
 }
@@ -157,7 +165,11 @@ fun GroupedSection(
             header.uppercase(), style = IosType.footnote, color = c.secondaryLabel,
             modifier = Modifier.padding(start = 16.dp, bottom = 6.dp, top = 8.dp),
         )
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(c.cell), content = content)
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(CardRadius)).background(c.cell)
+                .border(1.dp, c.hairline, RoundedCornerShape(CardRadius)),
+            content = content,
+        )
         if (footer != null) Text(
             footer, style = IosType.footnote, color = c.secondaryLabel,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
@@ -165,11 +177,15 @@ fun GroupedSection(
     }
 }
 
-/** 彩色圆角小图标（设置页风格）。 */
+/** 卡片 / 分组的圆角（方案 I：24dp 圆角面板 + 发丝描边）。 */
+val CardRadius = 24.dp
+
+/** 彩色圆角小图标（设置页风格）。浅色底（如橙色）上用深色图标，其余用白色。 */
 @Composable
 fun IconBadge(icon: ImageVector, tint: Color, size: Dp = 29.dp) {
-    Box(Modifier.size(size).clip(RoundedCornerShape(7.dp)).background(tint), contentAlignment = Alignment.Center) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(size * 0.62f))
+    val glyph = if (tint.luminance() > 0.3f) Color(0xFF0F0F0F) else Color.White
+    Box(Modifier.size(size).clip(RoundedCornerShape(9.dp)).background(tint), contentAlignment = Alignment.Center) {
+        Icon(icon, null, tint = glyph, modifier = Modifier.size(size * 0.62f))
     }
 }
 
@@ -202,7 +218,7 @@ fun IosRow(
             .then(if (onClick != null) Modifier.clickable(src, null, onClick = onClick) else Modifier)
     ) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(start = 16.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+            Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (leading != null) { leading(); Spacer(Modifier.width(12.dp)) }
@@ -223,72 +239,119 @@ fun IosRow(
     }
 }
 
-/** iOS 开关（51×31，绿色，弹簧动画）。 */
+/**
+ * 开关（方案 I：52×32；开 = 橙色轨道 + #0F0F0F 圆钮；关 = 面板色轨道 + 描边色圆钮和描边）。
+ * 外面留出 48dp 高的点击区域。
+ */
 @Composable
 fun IosSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true) {
     val c = Ios.colors
-    val track by animateColorAsState(if (checked) c.green else c.fill, label = "track")
-    val x by animateDpAsState(if (checked) 22.dp else 2.dp, IosMotion.bouncy(), label = "thumb")
-    var pressed by remember { mutableStateOf(false) }
-    val w by animateDpAsState(if (pressed) 34.dp else 27.dp, IosMotion.snappy(), label = "w")
+    val track by animateColorAsState(if (checked) c.accent else c.fill, label = "track")
+    val border by animateColorAsState(if (checked) c.accent else c.edge, label = "border")
+    val knob by animateColorAsState(if (checked) c.onAccent else c.edge, label = "knob")
+    val x by animateDpAsState(if (checked) 23.dp else 3.dp, IosMotion.bouncy(), label = "thumb")
     Box(
-        Modifier.size(51.dp, 31.dp).clip(CircleShape).background(track)
+        Modifier.size(52.dp, 48.dp)
             .graphicsLayer { alpha = if (enabled) 1f else 0.5f }
+            .semantics { role = Role.Switch; toggleableState = if (checked) ToggleableState.On else ToggleableState.Off }
             .pointerInput(enabled, checked) {
-                if (enabled) detectTapGestures(
-                    onPress = { pressed = true; tryAwaitRelease(); pressed = false },
-                    onTap = { onCheckedChange(!checked) },
-                )
-            }
+                if (enabled) detectTapGestures(onTap = { onCheckedChange(!checked) })
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
-            // 按住时滑块变宽、弹簧动画还会越过终点，算出来的左边距可能 < 0 或超出轨道。
-            // 之前用 padding（负值会抛 IllegalArgumentException → 闪退），现在用 offset 并限制在轨道内。
-            Modifier.offset(x = (if (checked) x - (w - 27.dp) else x).coerceIn(0.dp, (51.dp - w).coerceAtLeast(0.dp)), y = 2.dp)
-                .size(w, 27.dp).shadow(3.dp, CircleShape).clip(CircleShape).background(Color.White)
-        )
+        Box(Modifier.size(52.dp, 32.dp).clip(CircleShape).background(track).border(2.dp, border, CircleShape)) {
+            // 弹簧动画可能越过终点：用 offset 并限制在轨道内（负 padding 会抛异常 → 闪退，见 v0.3.4）
+            Box(
+                Modifier.offset(x = x.coerceIn(0.dp, 27.dp), y = 5.dp)
+                    .size(22.dp).clip(CircleShape).background(knob)
+            )
+        }
     }
 }
 
-/** iOS 分段控件，选中块带弹簧滑动。 */
+/** 分段控件（方案 I：胶囊形，选中块是高一层的面板色，带弹簧滑动）。 */
 @Composable
 fun <T> IosSegmented(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
     val c = Ios.colors
     var width by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
     val idx = options.indexOf(selected).coerceAtLeast(0)
-    val segW = if (options.isEmpty()) 0.dp else with(density) { (width / options.size).toDp() }
+    val segW = if (options.isEmpty()) 0.dp else with(density) { ((width - with(density) { 8.dp.roundToPx() }) / options.size).toDp() }
     val off by animateDpAsState(segW * idx, IosMotion.bouncy(), label = "seg")
     Box(
-        modifier.height(32.dp).clip(RoundedCornerShape(9.dp)).background(c.fill).onSizeChanged { width = it.width }
+        modifier.height(48.dp).clip(RoundedCornerShape(24.dp)).background(c.groupedBg)
+            .border(1.dp, c.hairline, RoundedCornerShape(24.dp)).onSizeChanged { width = it.width }.padding(4.dp)
     ) {
         if (width > 0) Box(
-            Modifier.padding(2.dp).offset(x = off).width(segW - 4.dp).fillMaxHeight()
-                .shadow(2.dp, RoundedCornerShape(7.dp)).clip(RoundedCornerShape(7.dp))
-                .background(if (c.dark) Color(0xFF636366) else Color.White)
+            Modifier.offset(x = off).width(segW).fillMaxHeight()
+                .clip(RoundedCornerShape(20.dp)).background(c.elevated)
         )
         Row(Modifier.fillMaxSize()) {
             options.forEach { o ->
                 Box(
-                    Modifier.weight(1f).fillMaxHeight().clickable(remember { MutableInteractionSource() }, null) { onSelect(o) },
+                    Modifier.weight(1f).fillMaxHeight()
+                        .semantics { this.selected = o == selected; role = Role.Tab }
+                        .clickable(remember { MutableInteractionSource() }, null) { onSelect(o) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(label(o), style = IosType.footnote.copy(fontWeight = if (o == selected) androidx.compose.ui.text.font.FontWeight.SemiBold else null), color = c.label)
+                    Text(label(o), style = IosType.footnote.copy(fontWeight = if (o == selected) androidx.compose.ui.text.font.FontWeight.SemiBold else null),
+                        color = if (o == selected) c.label else c.secondaryLabel, maxLines = 1)
                 }
             }
         }
     }
 }
 
-/** 大号填充按钮（iOS 风格）。 */
+/**
+ * 大号按钮（方案 I：56dp 高的胶囊，应用图标的橙 #FF8B37 平涂，字是 #0F0F0F；不加描边或阴影）。
+ * 传入 [color]（例如红色的危险操作）时用白字。
+ */
 @Composable
 fun FilledButton(text: String, modifier: Modifier = Modifier, color: Color? = null, enabled: Boolean = true, onClick: () -> Unit) {
     val c = Ios.colors
+    val bg = if (!enabled) c.fill else color ?: c.accent
+    val fg = when {
+        !enabled -> c.tertiaryLabel
+        color == null || color == c.accent -> c.onAccent
+        else -> Color.White
+    }
     Box(
-        modifier.fillMaxWidth().height(50.dp).pressable(enabled = enabled, onClick = onClick)
-            .clip(RoundedCornerShape(12.dp)).background(if (enabled) (color ?: c.blue) else c.fill),
+        modifier.fillMaxWidth().height(56.dp).pressable(enabled = enabled, onClick = onClick)
+            .semantics { role = Role.Button }
+            .clip(RoundedCornerShape(28.dp)).background(bg),
         contentAlignment = Alignment.Center,
-    ) { Text(text, style = IosType.headline, color = if (enabled) Color.White else c.tertiaryLabel) }
+    ) { Text(text, style = IosType.headline, color = fg) }
+}
+
+/**
+ * 勾选框（方案 I：22dp 圆角方块，橙色底 + 加粗的 #0F0F0F 勾；部分选中 = 横线；未选 = 描边空框）。
+ * 外面是 44dp 的点击区域。
+ */
+@Composable
+fun AccentCheck(checked: Boolean, partial: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+    val c = Ios.colors
+    val on = checked || partial
+    Box(
+        Modifier.size(44.dp).pressable(enabled = enabled, onClick = onClick)
+            .semantics { role = Role.Checkbox; toggleableState = when { checked -> ToggleableState.On; partial -> ToggleableState.Indeterminate; else -> ToggleableState.Off } },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(22.dp).clip(RoundedCornerShape(7.dp))
+                .background(if (on && enabled) c.accent else Color.Transparent)
+                .then(if (!on || !enabled) Modifier.border(1.5.dp, if (enabled) c.edge else c.tertiaryLabel, RoundedCornerShape(7.dp)) else Modifier),
+        ) {
+            if (on && enabled) androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                val w = size.width
+                val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.1.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    if (checked) { moveTo(w * 0.24f, w * 0.52f); lineTo(w * 0.43f, w * 0.70f); lineTo(w * 0.77f, w * 0.31f) }
+                    else { moveTo(w * 0.28f, w * 0.5f); lineTo(w * 0.72f, w * 0.5f) }
+                }
+                drawPath(path, c.onAccent, style = stroke)
+            }
+        }
+    }
 }
 
 /** 空状态。 */

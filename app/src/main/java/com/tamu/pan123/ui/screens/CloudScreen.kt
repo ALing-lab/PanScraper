@@ -220,7 +220,7 @@ private fun CloudBrowser(
                         if (i > 0) Text(" › ", style = IosType.footnote, color = c.tertiaryLabel)
                         Text(
                             cr.name, style = IosType.footnote,
-                            color = if (i == crumbs.lastIndex) c.label else c.blue,
+                            color = if (i == crumbs.lastIndex) c.label else c.link,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = if (i < crumbs.lastIndex) Modifier.pressable { goCrumb(i) } else Modifier,
                         )
