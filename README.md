@@ -38,7 +38,7 @@
 
 ## 下载
 
-0.3.6 修复了任务恢复、删除依赖、WebDAV 路径边界及网页登录兼容性，详见[修复与验证说明](docs/releases/v0.3.6.zh-CN.md)。
+0.3.6 的更新与修复概览见[更新日志](CHANGELOG.md)，验证细节见[修复报告](docs/releases/v0.3.6.zh-CN.md)。
 
 到 [Releases](https://github.com/ALing-lab/PanScraper/releases) 下载最新的 `PanScraper-vX.Y.Z.apk`。应用内「设置 → 关于 → 检查更新」也可以直接更新。下载后可用随版本提供的 `SHA256SUMS.txt` 核对文件摘要：
 
