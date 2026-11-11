@@ -109,6 +109,14 @@ class Drive115Test {
     }
 
     @Test
+    fun unconfirmedUploadIsFailure() = runBlocking {
+        srv.confirmUploads = false
+        val result = drive.upload("10", "poster.jpg", byteArrayOf(1, 2, 3))
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()!!.message!!.contains("未确认"))
+    }
+
+    @Test
     fun missingDirReturnsEmptyNotRoot() = runBlocking {
         srv.file("f1", "a.mkv", "10")
         srv.forceCid = "0" // 115 对不存在的目录会回落到根目录

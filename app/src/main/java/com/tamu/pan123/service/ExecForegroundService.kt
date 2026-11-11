@@ -77,7 +77,7 @@ class ExecForegroundService : Service() {
                 }
                 val ids = intent.getStringArrayListExtra(EXTRA_ACTION_IDS)
                 val resume = intent.getBooleanExtra(EXTRA_RESUME, false)
-                launchRun(ids, resume, startPaused = false)
+                launchRun(ids, resume, startPaused = false, planName = intent.getStringExtra(EXTRA_PLAN_NAME), planKey = intent.getStringExtra(EXTRA_PLAN_KEY))
             }
             else -> if (job?.isActive != true) stopSelfSafely()
         }
@@ -85,10 +85,13 @@ class ExecForegroundService : Service() {
         return if (job?.isActive == true) START_STICKY else START_NOT_STICKY
     }
 
-    private fun launchRun(ids: List<String>?, resume: Boolean, startPaused: Boolean) {
+    private fun launchRun(ids: List<String>?, resume: Boolean, startPaused: Boolean, planName: String? = null, planKey: String? = null) {
         job = scope.launch {
             try {
-                val plan = PlanStore.load()
+                val task = if (resume) TaskStore.load() ?: error("找不到待恢复的任务") else null
+                val plan = if (task != null) PlanStore.forTask(task) else PlanStore.loadNamed(planName ?: error("缺少计划文件，请重新发起执行"))
+                check(planKey == null || PlanStore.key(plan) == planKey) { "计划内容已变化，请重新确认执行" }
+                check(task == null || task.accountId == plan.accountId) { "任务账号与计划不一致" }
                 ExecutionEngine.run(plan, ids, resumeExisting = resume, startPaused = startPaused)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -97,7 +100,7 @@ class ExecForegroundService : Service() {
                 com.tamu.pan123.data.net.NetLog.error("exec", msg)
                 val cur = TaskStore.load()
                 if (cur != null && cur.status != TaskRun.STATUS_DONE) {
-                    val next = cur.copy(status = TaskRun.STATUS_DONE, message = msg, finishedAt = System.currentTimeMillis())
+                    val next = cur.copy(status = TaskRun.STATUS_DONE, message = msg, terminalError = msg, finishedAt = System.currentTimeMillis())
                     TaskStore.save(next)
                     ExecutionEngine.reportLive(next)
                 } else {
@@ -112,6 +115,12 @@ class ExecForegroundService : Service() {
     private fun stopSelfSafely() {
         runCatching { stopForeground(STOP_FOREGROUND_DETACH) }
         stopSelf()
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ExecutionEngine.pause()
+        job?.cancel()
+        stopSelfSafely()
     }
 
     override fun onDestroy() {
@@ -179,12 +188,19 @@ class ExecForegroundService : Service() {
         const val ACTION_STOP = "com.tamu.pan123.EXEC_STOP"
         const val EXTRA_ACTION_IDS = "action_ids"
         const val EXTRA_RESUME = "resume"
+        const val EXTRA_PLAN_NAME = "plan_name"
+        const val EXTRA_PLAN_KEY = "plan_key"
 
-        fun start(context: Context, actionIds: List<String>? = null, resume: Boolean = false) {
+        fun start(context: Context, actionIds: List<String>? = null, resume: Boolean = false, plan: com.tamu.pan123.data.scrape.ScrapePlan? = null) {
             val i = Intent(context, ExecForegroundService::class.java).setAction(ACTION_START)
             if (actionIds != null) i.putStringArrayListExtra(EXTRA_ACTION_IDS, ArrayList(actionIds))
             i.putExtra(EXTRA_RESUME, resume)
             try {
+                if (!resume) {
+                    val chosen = plan ?: PlanStore.load()
+                    i.putExtra(EXTRA_PLAN_NAME, PlanStore.fileFor(chosen).name)
+                    i.putExtra(EXTRA_PLAN_KEY, PlanStore.key(chosen))
+                }
                 if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i) else context.startService(i)
             } catch (e: Exception) {
                 ExecutionEngine.reportStartError("无法启动后台执行服务：${e.message ?: e.javaClass.simpleName}")

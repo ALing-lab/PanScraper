@@ -20,6 +20,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -52,140 +53,195 @@ internal fun isOfficialUrl(url: String?, hosts: List<String>): Boolean {
     return u.scheme.equals("https", true) && com.tamu.pan123.data.net.HostMatch.matchesAny(u.host, hosts)
 }
 
-private val LOGIN_URLS = listOf(
-    "https://www.123pan.com/login",
-    "https://login.123pan.com/",
+/** 官方网页入口。旧 /login 会跳转到过期站点或明文地址，不能再作为首选。 */
+internal val LOGIN_URLS = listOf(
     "https://www.123pan.com/",
+    "https://www.123pan.cn/",
+    "https://yun.123pan.cn/",
 )
 
-/**
- * 网页登录：加载 123 登录页，登录成功后从 localStorage / cookie 抓 authorToken。
- * 成功后把 token 写入 SecureStore 并 pop。
- */
+/** 保留设备真实 Chromium 版本，桌面模式不再固定伪装成旧版手机。 */
+internal fun loginUserAgent(native: String, desktop: Boolean): String {
+    val clean = native.replace("; wv", "").replace(" Version/4.0", "")
+    if (!desktop) return clean
+    return clean.replace(Regex("\\([^)]*\\)"), "(X11; Linux x86_64)").replace(" Mobile", "")
+}
+
+internal class LoginAttempts(private val urls: List<String> = LOGIN_URLS) {
+    var index: Int = 0; private set
+    val current: String get() = urls[index]
+    fun next(): String? = if (index + 1 < urls.size) urls[++index] else null
+    fun reset(): String { index = 0; return current }
+}
+
+/** 官方页面打开后检查真实 DOM，避免 HTTP200 空壳页永久留白。 */
+internal const val LOGIN_HEALTH_JS = """(function(){var b=document.body;if(!b)return false;return b.innerText.trim().length>0||!!b.querySelector('input,button,iframe,canvas,img,svg');})();"""
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun WebLoginScreen(nav: NavHostController) {
     val c = Ios.colors
+    val tablet = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 600
+    var desktop by remember { mutableStateOf(tablet) }
     var loading by remember { mutableStateOf(true) }
-    var status by remember { mutableStateOf("打开登录页…") }
+    var status by remember { mutableStateOf("打开 123 官方网页…") }
     var captured by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var instance by remember { mutableIntStateOf(0) }
+    var failed by remember { mutableStateOf(false) }
+    var pageSerial by remember { mutableIntStateOf(0) }
+    val attempts = remember { LoginAttempts() }
     val scope = rememberCoroutineScope()
-
+    var pollJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var checking by remember { mutableStateOf(false) }
     val rejected = remember { mutableSetOf<String>() }
 
-    /** 先验证（列目录）再保存：验证失败的 token 不保存，也不会覆盖已有的登录。 */
     fun onToken(token: String, source: String) {
         if (captured || checking || token.isBlank() || token.length < 20 || token in rejected) return
         checking = true
-        status = "已获取 token（$source），正在验证…"
+        status = "已获取登录状态（$source），正在验证…"
         scope.launch {
-            val ok = try { Pan123Client.ping(token) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { false }
-            checking = false
-            if (ok) {
-                captured = true
-                com.tamu.pan123.data.drive.AccountStore.save123Login(token)
-                status = "登录成功"
-                delay(400)
-                nav.popBackStack()
-            } else {
-                rejected += token
-                status = "读取到的 token 验证失败（未保存，原来的登录不受影响）。请确认已登录成功，或点「刷新」重试"
-            }
+            try {
+                val ok = Pan123Client.ping(token)
+                if (ok) {
+                    captured = true
+                    com.tamu.pan123.data.drive.AccountStore.save123Login(token)
+                    status = "登录成功"
+                    delay(400)
+                    nav.popBackStack()
+                } else {
+                    rejected += token
+                    status = "登录状态验证失败，未保存。请完成登录后刷新重试"
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { status = "验证登录状态失败，请刷新重试" }
+            finally { checking = false }
         }
     }
-
     fun extract(view: WebView?) {
         if (view == null || !isOfficialUrl(view.url, PAN123_HOSTS)) return
-        view.evaluateJavascript(EXTRACT_JS) { r ->
-            val t = r?.trim()?.removeSurrounding("\"")?.takeIf { it.isNotBlank() && it != "null" } ?: return@evaluateJavascript
-            onToken(t.replace("\\\"", "\""), "localStorage")
+        view.evaluateJavascript(EXTRACT_JS) { raw ->
+            if (!isOfficialUrl(view.url, PAN123_HOSTS)) return@evaluateJavascript
+            val token = runCatching { JSONObject("{\"value\":${raw ?: "null"}}").optString("value", "") }.getOrDefault("")
+            if (token != "null") onToken(token, "网页")
         }
+        scrapeCookies()?.let { onToken(it, "cookie") }
+    }
+    fun retry() {
+        pollJob?.cancel(); rejected.clear(); failed = false; loading = true
+        if (webViewRef == null) { attempts.reset(); instance++ } else webViewRef?.loadUrl(attempts.reset())
+    }
+    fun failure(view: WebView?, reason: String) {
+        pollJob?.cancel(); failed = true; loading = false
+        val next = attempts.next()
+        if (next != null && view != null) {
+            status = "$reason，正在切换官方线路…"
+            view.post { if (webViewRef === view) view.loadUrl(next) }
+        } else status = "$reason。可刷新、换线路或切换显示模式；若仍失败，请更新 Android System WebView 后重试"
     }
 
+    // 主文档超时也会退出加载状态，不能永久显示空白 + 转圈。
+    LaunchedEffect(pageSerial) {
+        val serial = pageSerial
+        delay(25_000)
+        if (loading && !captured && serial == pageSerial) failure(webViewRef, "网页加载超时")
+    }
     Column(Modifier.fillMaxSize().background(c.groupedBg)) {
-        // 简易顶栏
         Column(Modifier.fillMaxWidth().background(c.barBg)) {
             Spacer(Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
             Box(Modifier.fillMaxWidth().height(44.dp)) {
-                Text(
-                    "取消", style = IosType.body, color = c.link,
-                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 14.dp)
-                        .pressable { nav.popBackStack() }.padding(8.dp),
-                )
+                Text("取消", style = IosType.body, color = c.link,
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 14.dp).pressable { nav.popBackStack() }.padding(8.dp))
                 Text("网页登录", style = IosType.headline, color = c.label, modifier = Modifier.align(Alignment.Center))
-                Text(
-                    "刷新", style = IosType.body, color = c.link,
-                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp)
-                        .pressable { webViewRef?.reload() }.padding(8.dp),
-                )
+                Text("刷新", style = IosType.body, color = c.link,
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp).pressable { retry() }.padding(8.dp))
             }
-            Box(Modifier.fillMaxWidth().height(0.5.dp).background(c.separator))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                Text(if (desktop) "切换手机版" else "切换电脑版", color = c.link, style = IosType.footnote,
+                    modifier = Modifier.pressable { desktop = !desktop; attempts.reset(); instance++ })
+                Text("换线路", color = c.link, style = IosType.footnote,
+                    modifier = Modifier.pressable { rejected.clear(); webViewRef?.loadUrl(attempts.next() ?: attempts.reset()) })
+            }
         }
-        Text(status, style = IosType.footnote, color = c.secondaryLabel,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-        Box(Modifier.fillMaxSize()) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    WebView(ctx).apply {
+        Text(status, style = IosType.footnote, color = if (failed) c.red else c.secondaryLabel,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+        // 明确限制原生 View 高度，避免大屏转场中盖住 Compose 的状态/返回栏。
+        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+            key(instance) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx -> WebView(ctx).apply {
                         webViewRef = this
+                        layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
-                        settings.databaseEnabled = true
-                        settings.userAgentString =
-                            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                        // 不再注入 JS 桥（任何页面都能调用它）；改为只在 123 官方页面上执行脚本、读取返回值
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
+                        settings.builtInZoomControls = true
+                        settings.displayZoomControls = false
+                        settings.userAgentString = loginUserAgent(android.webkit.WebSettings.getDefaultUserAgent(ctx), desktop)
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
+                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        CookieManager.getInstance().setAcceptCookie(true)
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                         webChromeClient = WebChromeClient()
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                loading = true
-                                status = "加载中…"
+                                pollJob?.cancel(); pageSerial++; failed = false; loading = true
+                                status = "正在加载 123 官方网页…"
                             }
                             override fun onPageFinished(view: WebView?, url: String?) {
-                                loading = false
-                                status = "请在页面中登录；成功后会自动获取 token"
-                                if (!isOfficialUrl(url, PAN123_HOSTS)) {
-                                    status = "当前页面不是 123 官方网页，不会读取登录信息"
-                                    return
-                                }
-                                extract(view)
-                                // 再轮询几次，登录跳转后 localStorage 才写入
-                                scope.launch {
-                                    repeat(12) {
-                                        delay(1500)
-                                        if (captured) return@launch
+                                if (failed || captured || view == null || view.url != url) return
+                                if (!isOfficialUrl(url, PAN123_HOSTS)) { failure(view, "已阻止非官方登录网页"); return }
+                                loading = false; status = "请在网页中登录；成功后会自动保存"
+                                val serial = pageSerial
+                                pollJob?.cancel()
+                                pollJob = scope.launch {
+                                    repeat(120) { n ->
+                                        if (captured || serial != pageSerial || webViewRef !== view) return@launch
                                         extract(view)
-                                        if (isOfficialUrl(view?.url, PAN123_HOSTS)) scrapeCookies()?.let { onToken(it, "cookie") }
+                                        if (n == 5) view.evaluateJavascript(LOGIN_HEALTH_JS) { healthy ->
+                                            if (healthy == "false" && serial == pageSerial && !captured) failure(view, "登录网页未显示内容")
+                                        }
+                                        delay(1500)
                                     }
                                 }
                             }
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                                if (request?.isForMainFrame == true) failure(view, "网页加载失败（${error?.errorCode ?: "未知"}）")
+                            }
+                            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, response: android.webkit.WebResourceResponse?) {
+                                if (request?.isForMainFrame == true) failure(view, "网页返回 HTTP ${response?.statusCode}")
+                            }
+                            override fun onReceivedSslError(view: WebView?, handler: android.webkit.SslErrorHandler?, error: android.net.http.SslError?) {
+                                handler?.cancel(); failure(view, "网页证书验证失败")
+                            }
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                // 只允许在 123 官方域名内跳转（主框架）；其它网址一律拦下
                                 if (request?.isForMainFrame == false) return false
-                                val u = request?.url?.toString()
-                                if (isOfficialUrl(u, PAN123_HOSTS)) return false
-                                status = "已阻止打开非 123 官方网页：${request?.url?.host ?: u}"
+                                if (isOfficialUrl(request?.url?.toString(), PAN123_HOSTS)) return false
+                                failed = true; loading = false
+                                status = "已阻止不安全或非官方网页，请换线路重试"
                                 return true
                             }
+                            override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                                pollJob?.cancel(); loading = false; failed = true
+                                status = "网页显示进程已退出，请刷新重试"
+                                if (webViewRef === view) webViewRef = null
+                                view?.destroy(); return true
+                            }
                         }
-                        loadUrl(LOGIN_URLS.first())
-                    }
-                },
-                update = { /* keep */ },
-            )
-            if (loading) {
-                CircularProgressIndicator(
-                    color = c.blue,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 24.dp).size(28.dp),
-                    strokeWidth = 2.dp,
+                        loadUrl(attempts.current)
+                    } },
+                    onRelease = { view ->
+                        pollJob?.cancel(); view.stopLoading()
+                        if (webViewRef === view) webViewRef = null
+                        view.destroy()
+                    },
                 )
             }
+            if (loading) CircularProgressIndicator(color = c.blue,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 24.dp).size(28.dp), strokeWidth = 2.dp)
         }
     }
 }
@@ -193,7 +249,7 @@ fun WebLoginScreen(nav: NavHostController) {
 /** 从 cookie 字符串里找 authorToken / token。 */
 private fun scrapeCookies(): String? {
     val cm = CookieManager.getInstance()
-    val hosts = listOf("https://www.123pan.com", "https://123pan.com", "https://login.123pan.com")
+    val hosts = listOf("https://www.123pan.com", "https://123pan.com", "https://yun.123pan.cn", "https://www.123pan.cn", "https://123pan.cn")
     for (h in hosts) {
         val raw = cm.getCookie(h) ?: continue
         for (part in raw.split(';')) {

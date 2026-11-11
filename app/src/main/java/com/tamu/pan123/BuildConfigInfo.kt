@@ -1,6 +1,6 @@
 package com.tamu.pan123
 
-object BuildConfigInfo { const val VERSION = "0.3.5" }
+object BuildConfigInfo { const val VERSION = "0.3.6" }
 
 /** 应用信息（关于页 / 检查更新共用）。 */
 object AppInfo {

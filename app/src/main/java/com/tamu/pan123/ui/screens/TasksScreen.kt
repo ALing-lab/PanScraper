@@ -51,13 +51,14 @@ fun TasksScreen(nav: NavHostController) {
         ensureNotif()
         val plan = PlanStore.loadOrNull() ?: return
         val ids = com.tamu.pan123.data.scrape.PlanSelection.selectedIds(plan)
-        ExecForegroundService.start(ctx, ids)
+        ExecForegroundService.start(ctx, ids, plan = plan)
     }
 
     fun startFailed() {
         ensureNotif()
         val ids = r?.failedIds?.takeIf { it.isNotEmpty() } ?: return
-        ExecForegroundService.start(ctx, ids)
+        val plan = runCatching { PlanStore.forTask(r ?: return) }.getOrNull() ?: return
+        ExecForegroundService.start(ctx, com.tamu.pan123.data.exec.FailedRetry.retryIds(ids, plan), plan = plan)
     }
 
     LargeTitlePage("任务", bottomInset = bottomInset()) {
@@ -95,7 +96,7 @@ fun TasksScreen(nav: NavHostController) {
         val statusColor = when (r.status) {
             TaskRun.STATUS_RUNNING -> c.link
             TaskRun.STATUS_PAUSED -> c.orange
-            TaskRun.STATUS_DONE -> if (r.fail == 0) c.green else c.orange
+            TaskRun.STATUS_DONE -> if (r.fullySucceeded) c.green else c.orange
             else -> c.secondaryLabel
         }
 
@@ -140,9 +141,9 @@ fun TasksScreen(nav: NavHostController) {
             TaskRun.STATUS_DONE -> {
                 section("done", header = "结果") {
                     IosRow(
-                        if (r.fail == 0) "全部成功" else "有 ${r.fail} 项失败",
-                        icon = if (r.fail == 0) Icons.Rounded.CheckCircle else Icons.Rounded.Error,
-                        iconTint = if (r.fail == 0) c.green else c.red,
+                        if (r.fullySucceeded) "全部成功" else if (r.terminalError != null) "任务执行失败" else if (r.userStopped) "任务已结束，部分操作未完成" else "有 ${r.fail} 项失败",
+                        icon = if (r.fullySucceeded) Icons.Rounded.CheckCircle else Icons.Rounded.Error,
+                        iconTint = if (r.fullySucceeded) c.green else c.red,
                         subtitle = r.message,
                         chevron = r.fail > 0,
                         showDivider = false,

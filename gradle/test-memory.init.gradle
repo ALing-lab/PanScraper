@@ -1,0 +1,7 @@
+// Robolectric 截图测试需要的 JVM 内存；不含任何环境代理或凭据。
+allprojects {
+    tasks.withType(Test).configureEach {
+        maxHeapSize = '1500m'
+        maxParallelForks = 1
+    }
+}

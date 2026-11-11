@@ -191,6 +191,17 @@ data class HttpResult(val code: Int, val body: ByteArray, val headers: okhttp3.H
  * 可取消的请求：协程被取消时立即 call.cancel()，不会阻塞在 socket 上。
  * 响应体在 OkHttp 线程里读完再恢复协程。
  */
+private fun readResponseBounded(input: java.io.InputStream): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    while (true) {
+        val n = input.read(buffer)
+        if (n < 0) return out.toByteArray()
+        if (out.size() + n > 8 * 1024 * 1024) throw IOException("接口响应超过 8MB，已拒绝读取")
+        out.write(buffer, 0, n)
+    }
+}
+
 suspend fun OkHttpClient.fetch(req: Request): HttpResult = suspendCancellableCoroutine { cont ->
     val call = newCall(req)
     cont.invokeOnCancellation { runCatching { call.cancel() } }
@@ -201,7 +212,12 @@ suspend fun OkHttpClient.fetch(req: Request): HttpResult = suspendCancellableCor
 
         override fun onResponse(call: Call, response: Response) {
             try {
-                val r = response.use { HttpResult(it.code, it.body?.bytes() ?: ByteArray(0), it.headers) }
+                val r = response.use { HttpResult(it.code, it.body?.let { body ->
+                    if (body.contentLength() > 8 * 1024 * 1024) throw IOException("接口响应超过 8MB，已拒绝读取")
+                    val bytes = readResponseBounded(body.byteStream())
+                    if (bytes.size > 8 * 1024 * 1024) throw IOException("接口响应超过 8MB，已拒绝读取")
+                    bytes
+                } ?: ByteArray(0), it.headers) }
                 if (cont.isActive) cont.resume(r)
             } catch (e: IOException) {
                 if (cont.isActive) cont.resumeWithException(e)

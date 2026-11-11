@@ -288,7 +288,8 @@ class V03ScanTest {
         val again = scan(d, "/剧集")
         assertEquals(0, calls)
         assertEquals(1, again.stats.history)
-        assertTrue(again.groups.isEmpty())
+        assertEquals("历史", again.groups.single().confidence)
+        assertTrue("已完整整理的目录无需重复写入", again.actions.none { PlanSelection.executable(it) && it.kind != "cleanup" && it.op != "delete" })
         // 新增一集：沿用记住的条目，只处理新文件，仍不调 TMDB
         d.paths += "/剧集/雀骨(2026){tmdb-295558}/Season 1/Que.Gu.S01E02.mkv"
         val third = scan(d, "/剧集")

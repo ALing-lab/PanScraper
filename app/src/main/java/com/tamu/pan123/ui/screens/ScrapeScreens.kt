@@ -201,10 +201,11 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
         if (planOverride == null) plan = planWriteLock.withLock { runCatching { PlanStore.load() }.onFailure { loadErr = it.message }.getOrNull() }
     }
     fun commit(next: ScrapePlan) {
+        val before = plan ?: return
         plan = next
         if (planOverride == null) scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             planWriteLock.lock()
-            try { runCatching { PlanStore.update { cur -> cur.copy(actions = plan?.actions ?: next.actions) } } }
+            try { runCatching { PlanStore.mergeSelection(before, next) } }
             finally { planWriteLock.unlock() }
                 .let { r -> r.exceptionOrNull()?.let { execMsg = "保存勾选失败：${it.message}" } }
         }
@@ -302,8 +303,7 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
                     val isOpen = g.id in open
                     GroupHeader(g, tri, isOpen, agg.groupSummary(g.id),
                         onToggle = {
-                            val ids = p.actions.filter { it.groupId == g.id && com.tamu.pan123.data.scrape.PlanSelection.executable(it) && it.kind != "cleanup" }.map { it.id }
-                                .ifEmpty { p.actions.filter { it.groupId == g.id && com.tamu.pan123.data.scrape.PlanSelection.executable(it) }.map { it.id } }
+                            val ids = com.tamu.pan123.data.scrape.PlanSelection.groupIds(p, g.id)
                             commit(com.tamu.pan123.data.scrape.PlanSelection.set(p, ids, tri != com.tamu.pan123.data.scrape.PlanSelection.Tri.ALL))
                         },
                         onExpand = { expanded = if (isOpen) open - g.id else open + g.id },
@@ -338,13 +338,14 @@ fun PreviewScreen(nav: NavHostController, planOverride: ScrapePlan? = null) {
                 confirmIds = null
                 // 以磁盘上最新的计划为准（避免用到重新匹配前的旧计划）
                 val fresh = if (planOverride == null) runCatching { PlanStore.load() }.getOrNull() else p
-                val run = fresh?.let { f -> com.tamu.pan123.data.scrape.PlanSelection.selectedIds(f) }.orEmpty()
+                val run = if (fresh != null && PlanStore.key(fresh) == PlanStore.key(p) &&
+                    com.tamu.pan123.data.scrape.PlanSelection.selectedIds(fresh) == ids) ids else emptyList()
                 if (run.isEmpty()) {
                     execMsg = "没有可执行的操作（计划可能已变化，请重新勾选）"
                     plan = fresh ?: plan
                 } else {
                     if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    ExecForegroundService.start(ctx, run)
+                    ExecForegroundService.start(ctx, run, plan = fresh)
                     switchTab(com.tamu.pan123.ui.Tab.TASKS, null)
                 }
             },
@@ -584,12 +585,9 @@ fun RematchScreen(nav: NavHostController, groupId: String) {
         scope.launch {
             try {
                 val cur = PlanStore.load()
-                val g0 = cur.groups.firstOrNull { it.id == groupId } ?: error("找不到分组")
-                val next = if (g0.folderId != null) {
-                    val drive = com.tamu.pan123.data.drive.DriveRegistry.forAccount(cur.accountId)
-                    Scanner.replanGroup(cur, groupId, info, drive)
-                } else legacyApply(cur, groupId, info)
-                PlanStore.update { next }
+                val drive = com.tamu.pan123.data.drive.DriveRegistry.forAccount(cur.accountId)
+                val next = Scanner.replanGroup(cur, groupId, info, drive)
+                PlanStore.replace(cur, next)
                 nav.popBackStack()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -690,26 +688,3 @@ internal fun ScanProgressPanel(progress: Scanner.Progress, nowOverride: Long? = 
 
 
 /** 非文件夹分组（散文件）沿用旧逻辑：逐项改名，并重新计数、清掉相关提示。 */
-private fun legacyApply(cur: ScrapePlan, groupId: String, info: MatchInfo): ScrapePlan {
-    val N = com.tamu.pan123.data.naming.Naming
-    val newGroups = cur.groups.map { g ->
-        if (g.id != groupId) g else g.copy(kind = info.kind, tmdbId = info.id, title = info.title, year = info.year,
-            posterPath = info.posterPath, note = "已手动匹配", confidence = "手动", warn = null)
-    }
-    val newActions = cur.actions.map { a ->
-        if (a.groupId != groupId || a.kind != "file") a
-        else {
-            val (stem, ext) = N.splitNameExt(a.oldName)
-            val media = com.tamu.pan123.data.naming.MediaParse.parseMedia(stem)
-            val base = if (info.kind == "tv") {
-                val ep = N.parseEpisode(stem) ?: return@map a.copy(tmdbId = info.id, mediaKind = info.kind, note = "无集数，仅更新匹配")
-                N.buildEpisodeBase(info.title, info.year, ep.first ?: a.season ?: 1, ep.second, media)
-            } else N.buildMovieBase(info.title, info.year, media, stem)
-            val nn = base + ext
-            a.copy(op = if (nn == a.oldName) "skip" else "rename", newName = nn, tmdbId = info.id, mediaKind = info.kind)
-        }
-    }
-    val oldName = cur.groups.firstOrNull { it.id == groupId }?.folderName.orEmpty()
-    val flags = if (oldName.isBlank()) cur.flags else cur.flags.filter { !it.contains("「$oldName」") }
-    return cur.copy(groups = newGroups, actions = newActions, flags = flags, stats = Scanner.computeStats(newActions, newGroups))
-}

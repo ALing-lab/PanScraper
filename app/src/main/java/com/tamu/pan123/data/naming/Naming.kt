@@ -1,5 +1,8 @@
 package com.tamu.pan123.data.naming
 
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.withContext
+
 /**
  * 命名 / 季集 / 搜词 —— 对齐 rename_movies.py。
  */
@@ -118,8 +121,22 @@ object Naming {
     /** 「播放器兼容命名」（默认关，「简洁命名」的子开关）：视频文件名末尾（扩展名前）加 {tmdb-ID}。只在简洁命名打开时生效。 */
     @Volatile var tmdbInFileName: Boolean = false
 
+    data class Config(val simple: Boolean, val tmdb: Boolean)
+    private val snapshot = ThreadLocal<Config?>()
+    suspend fun <T> withSnapshot(block: suspend () -> T): T {
+        val config = snapshot.get() ?: Config(simpleNaming, tmdbInFileName)
+        return withContext(snapshot.asContextElement(config)) { block() }
+    }
+    fun <T> configured(simple: Boolean, tmdb: Boolean, block: () -> T): T {
+        val previous = snapshot.get()
+        snapshot.set(Config(simple, tmdb))
+        return try { block() } finally { snapshot.set(previous) }
+    }
+    private val simple: Boolean get() = snapshot.get()?.simple ?: simpleNaming
+    private val tmdbTag: Boolean get() = snapshot.get()?.tmdb ?: tmdbInFileName
+
     private fun withTmdb(base: String, tmdbId: Int?) =
-        if (simpleNaming && tmdbInFileName && tmdbId != null && tmdbId > 0) "$base{tmdb-$tmdbId}" else base
+        if (simple && tmdbTag && tmdbId != null && tmdbId > 0) "$base{tmdb-$tmdbId}" else base
 
     /** 去掉文件名里已有的 {tmdb-ID} / [tmdbid=ID] 标记（避免重复，也不让它干扰画质 / 片名解析）。 */
     fun stripTmdbMark(stem: String): String = TMDB_MARK.replace(stem, "").trim()
@@ -128,7 +145,7 @@ object Naming {
         withTmdb(buildMovieBaseRaw(title, year, media, stripTmdbMark(stem)), tmdbId)
 
     private fun buildMovieBaseRaw(title: String, year: String, media: MediaParse.Media, stem: String): String {
-        if (simpleNaming) return listOf(dotTitle(title), year, media.res).filter { it.isNotBlank() }.joinToString(".")
+        if (simple) return listOf(dotTitle(title), year, media.res).filter { it.isNotBlank() }.joinToString(".")
         val parts = mutableListOf(
             dotTitle(title), year, media.res, media.fps,
             if (stem.isNotEmpty()) MediaParse.movieHdr(stem) else media.hdr,
@@ -144,7 +161,7 @@ object Naming {
 
     fun buildEpisodeBase(title: String, year: String, season: Int, episode: Int, media: MediaParse.Media, tmdbId: Int? = null): String {
         val se = "S%02dE%02d".format(season, episode)
-        val base = if (simpleNaming) listOf(dotTitle(title), year, se).filter { it.isNotBlank() }.joinToString(".")
+        val base = if (simple) listOf(dotTitle(title), year, se).filter { it.isNotBlank() }.joinToString(".")
         else listOf(dotTitle(title), year, se, media.res, media.fps, media.hdr, media.audio).filter { it.isNotBlank() }.joinToString(".")
         return withTmdb(base, tmdbId)
     }

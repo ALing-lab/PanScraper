@@ -131,7 +131,7 @@ object Pan123Client {
     }
 
     /** 列目录（自动翻页）。只读。 */
-    suspend fun listFiles(folderId: Long, pageSize: Int = 100, token: String? = null): List<PanItem> {
+    suspend fun listFiles(folderId: Long, pageSize: Int = 100, token: String? = null, firstPageOnly: Boolean = false): List<PanItem> {
         val out = mutableListOf<PanItem>()
         var page = 1
         delay(LIST_SLEEP_MS)
@@ -160,7 +160,7 @@ object Pan123Client {
                 ?: ListData()
             val batch = data.infoList.map { it.copy(parentFileId = folderId) }
             out += batch
-            if (batch.isEmpty() || batch.size < pageSize || data.next == "-1") break
+            if (firstPageOnly || batch.isEmpty() || batch.size < pageSize || data.next == "-1") break
             page++
             delay(LIST_SLEEP_MS)
         }
@@ -170,7 +170,7 @@ object Pan123Client {
 
     /** 用当前 token 探测是否有效（列根目录第一页）。 */
     suspend fun ping(token: String? = null): Boolean = try {
-        listFiles(0, pageSize = 1, token = token)
+        listFiles(0, pageSize = 1, token = token, firstPageOnly = true)
         true
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e

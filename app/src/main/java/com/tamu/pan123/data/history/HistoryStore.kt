@@ -108,11 +108,11 @@ object HistoryStore {
         for (r in _state.value.records) {
             if (r.accountId != accountId) continue
             val g = r.groups.firstOrNull { g ->
-                g.folderName == folderName && (g.folderId == folderId || pathIds)
+                g.folderId == folderId && g.folderName == folderName
             } ?: continue
             // 同一文件夹多次执行：合并所有记录里的文件名
             val files = _state.value.records.filter { it.accountId == accountId }
-                .flatMap { rr -> rr.groups.filter { it.folderName == folderName && it.tmdbId == g.tmdbId }.flatMap { it.files } }
+                .flatMap { rr -> rr.groups.filter { it.folderId == folderId && it.folderName == folderName && it.tmdbId == g.tmdbId }.flatMap { it.files } }
                 .distinct()
             return g.copy(files = files)
         }
@@ -120,7 +120,7 @@ object HistoryStore {
     }
 
     /** 由执行引擎在一次执行结束时调用：只记录这次成功的项目。 */
-    fun recordRun(plan: ScrapePlan, actions: Map<String, PlanAction>, okIds: List<String>, now: Long = System.currentTimeMillis()): HistoryRecord? {
+    fun recordRun(plan: ScrapePlan, actions: Map<String, PlanAction>, okIds: List<String>, now: Long = System.currentTimeMillis(), idRemap: Map<String, String> = emptyMap(), pathIds: Boolean = false): HistoryRecord? {
         if (!isEnabled() || okIds.isEmpty()) return null
         val ok = okIds.mapNotNull { actions[it] }
         val groupsById = plan.groups.associateBy { it.id }
@@ -140,7 +140,7 @@ object HistoryStore {
             val finalName = if (renamed == null) g.folderName else if (renamed.done || renamed.id in okIds) renamed.newName else g.folderName
             val videos = acts.filter { (it.op == "rename" || it.op == "skip") && it.kind == "file" && it.tmdbId == tid && (it.op == "skip" || it.done || it.id in okIds) }
                 .map { it.newName.ifBlank { it.oldName } }
-            HistoryGroup(fid, finalName, g.kind, tid, g.title, g.year, videos)
+            HistoryGroup(com.tamu.pan123.data.drive.IdRemap(idRemap, pathMode = pathIds).resolve(fid) ?: fid, finalName, g.kind, tid, g.title, g.year, videos)
         }
         val title = plan.groups.filter { it.id in touched && it.title.isNotBlank() }.map { it.title }.distinct().let {
             when (it.size) { 0 -> "执行了 ${ok.size} 项"; 1 -> it[0]; else -> "${it[0]} 等 ${it.size} 部" }

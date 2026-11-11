@@ -29,7 +29,11 @@ data class TaskRun(
     val phase: Int = 0,
     /** 用户点过「结束」。进程被系统杀掉、服务被重新拉起时，这样的任务不会自动恢复。 */
     val userStopped: Boolean = false,
+    val planKey: String = "",
+    val terminalError: String? = null,
 ) {
+    val fullySucceeded: Boolean get() = status == STATUS_DONE && terminalError == null && !userStopped &&
+        actionIds.isNotEmpty() && fail == 0 && items.none { it.status == TaskItem.WAIT || it.status == TaskItem.RUNNING }
     companion object {
         const val STATUS_IDLE = "idle"
         const val STATUS_RUNNING = "running"

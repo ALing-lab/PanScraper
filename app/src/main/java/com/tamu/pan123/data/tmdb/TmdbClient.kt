@@ -58,11 +58,14 @@ object TmdbClient {
         var last: java.io.IOException? = null
         var lastHost = ""
         for (base in bases()) {
+            val key = apiKey().trim().removePrefix("Bearer ")
+            val bearer = key.count { it == '.' } == 2
             val url = (base + path).toHttpUrl().newBuilder()
-                .addQueryParameter("api_key", apiKey())
+                .also { if (!bearer) it.addQueryParameter("api_key", key) }
                 .also { b -> params.forEach { (k, v) -> b.addQueryParameter(k, v) } }
                 .build()
-            val req = Request.Builder().url(url).header("User-Agent", "123pan-tmdb-android/0.2").get().build()
+            val req = Request.Builder().url(url).header("User-Agent", "123pan-tmdb-android/0.2")
+                .also { if (bearer) it.header("Authorization", "Bearer $key") }.get().build()
             try {
                 val r = http.fetch(req)
                 if (base != TmdbNet.config.value.apiBase && autoBase == null) {
@@ -224,8 +227,10 @@ object TmdbClient {
         }
         var score = best
         val ry = (r.releaseDate ?: "").take(4)
-        if (!year.isNullOrBlank() && ry.all { it.isDigit() }) {
-            val diff = abs(ry.toInt() - year.toInt())
+        val releaseYear = ry.takeIf { it.length == 4 }?.toIntOrNull()
+        val queryYear = year?.toIntOrNull()
+        if (queryYear != null && releaseYear != null) {
+            val diff = abs(releaseYear - queryYear)
             score += when (diff) { 0 -> 40.0; 1 -> 15.0; else -> -20.0 }
         } else if (!year.isNullOrBlank()) score -= 10
         val votes = r.voteCount

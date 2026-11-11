@@ -61,12 +61,14 @@ object AppDirs {
     }
 
     /** 清理海报/计划/缓存/日志/预览；保留登录与 TMDB 密钥。返回清理前总字节数。 */
-    fun clearAll(): Long {
+    fun clearAll(): Long = WorkGuard.idle {
         val before = sizeBytes()
         listOf(posters, plans, tmdbCache, imgCache, logs, preview).forEach { dir ->
             if (dir.exists()) dir.deleteRecursively()
             dir.mkdirs()
         }
-        return before
+        com.tamu.pan123.data.exec.TaskStore.clear()
+        com.tamu.pan123.data.scrape.PlanStore.reset()
+        before
     }
 }

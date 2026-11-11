@@ -58,7 +58,7 @@ class WebDavDrive(
         while (b.build().pathSegments.lastOrNull() == "" && b.build().pathSegments.size > 1) {
             b.removePathSegment(b.build().pathSegments.size - 1)
         }
-        val segs = path.split('/').filter { it.isNotEmpty() }
+        val segs = safeSegments(path)
         if (b.build().pathSegments == listOf("")) {
             // base 是根 "/"：第一段直接覆盖空段
             if (segs.isNotEmpty()) b.setPathSegment(0, segs.first())
@@ -67,7 +67,14 @@ class WebDavDrive(
             segs.forEach { b.addPathSegment(it) }
         }
         if (dir) b.addPathSegment("")
-        return b.build()
+        return b.build().also { u ->
+            require(u.scheme == base.scheme && u.host == base.host && u.port == base.port &&
+                u.pathSegments.filter { it.isNotEmpty() }.take(baseSegs.size) == baseSegs) { "WebDAV 路径越出配置目录" }
+        }
+    }
+
+    private fun safeSegments(path: String): List<String> = path.split('/').filter { it.isNotEmpty() }.also { parts ->
+        require(parts.none { it == "." || it == ".." || '\\' in it || it.any { c -> c < ' ' || c == '\u007f' } }) { "WebDAV 路径不合法" }
     }
 
     /** 把服务器返回的 href 转为 ID（相对路径，已解码）。不在 base 下的返回 null。 */
@@ -75,10 +82,14 @@ class WebDavDrive(
         val raw = href.trim()
         val pathPart = when {
             raw.startsWith("http://", true) || raw.startsWith("https://", true) ->
-                raw.toHttpUrl().encodedPath
+                runCatching { raw.toHttpUrl() }.getOrNull()?.let { u ->
+                    if (u.scheme != base.scheme || u.host != base.host || u.port != base.port) return null
+                    u.encodedPath
+                } ?: return null
             else -> raw.substringBefore('?')
         }
         val segs = pathPart.split('/').filter { it.isNotEmpty() }.map { decodeSeg(it) }
+        if (segs.any { it == "." || it == ".." || '/' in it || '\\' in it || it.any { c -> c < ' ' || c == '\u007f' } }) return null
         if (segs.size < baseSegs.size || segs.subList(0, baseSegs.size) != baseSegs) return null
         val rel = segs.drop(baseSegs.size)
         return "/" + rel.joinToString("/")
@@ -125,12 +136,26 @@ class WebDavDrive(
             if (resp.code in listOf(301, 302, 307, 308) && !asDir) return propfind(path, depth, asDir = true)
             if (resp.code == 404) return 404 to emptyList()
             if (resp.code != 207 && resp.code != 200) fail("列目录", resp)
-            return resp.code to parseMultistatus(resp.body?.string().orEmpty())
+            val body = resp.body ?: throw IOException("WebDAV 返回空响应")
+            val bytes = body.byteStream().use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(8192)
+                while (true) {
+                    val n = input.read(buf); if (n < 0) break
+                    if (out.size() + n > 8 * 1024 * 1024) throw IOException("WebDAV 列表过大，未完整读取")
+                    out.write(buf, 0, n)
+                }
+                out.toByteArray()
+            }
+            val props = parseMultistatus(String(bytes, Charsets.UTF_8))
+            if (props.none { norm(it.id) == norm(path) }) throw IOException("WebDAV 未确认目标资源状态")
+            return resp.code to props
         }
     }
 
     private fun parseMultistatus(xml: String): List<Prop> {
-        if (xml.isBlank()) return emptyList()
+        if (xml.isBlank() || Regex("<!DOCTYPE|<!ENTITY", RegexOption.IGNORE_CASE).containsMatchIn(xml))
+            throw IOException("WebDAV XML 为空或包含不允许的声明")
         val f = DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = true
             runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
@@ -141,21 +166,28 @@ class WebDavDrive(
         val responses = doc.getElementsByTagNameNS("DAV:", "response")
         for (i in 0 until responses.length) {
             val r = responses.item(i) as Element
+            val directStatus = (0 until r.childNodes.length).map { r.childNodes.item(it) }
+                .firstOrNull { it.localName == "status" }?.textContent
+            if (directStatus != null && !Regex("HTTP/[^ ]+ 2[0-9]{2}(?: .*|$)").matches(directStatus.trim()))
+                throw IOException("WebDAV 资源读取失败")
             val href = r.getElementsByTagNameNS("DAV:", "href").item(0)?.textContent ?: continue
-            val id = idFromHref(href) ?: continue
+            val id = idFromHref(href) ?: throw IOException("WebDAV 返回越界或无效路径")
             // 只取 2xx 的 propstat
             var isDir = false
             var size = 0L
             var etag: String? = null
             val stats = r.getElementsByTagNameNS("DAV:", "propstat")
+            var goodProps = false
             for (j in 0 until stats.length) {
                 val st = stats.item(j) as Element
                 val status = st.getElementsByTagNameNS("DAV:", "status").item(0)?.textContent.orEmpty()
                 if (status.isNotEmpty() && !status.contains(" 2")) continue
+                goodProps = true
                 if (st.getElementsByTagNameNS("DAV:", "collection").length > 0) isDir = true
                 st.getElementsByTagNameNS("DAV:", "getcontentlength").item(0)?.textContent?.trim()?.toLongOrNull()?.let { size = it }
                 st.getElementsByTagNameNS("DAV:", "getetag").item(0)?.textContent?.trim()?.let { etag = it.trim('"') }
             }
+            if (!goodProps) throw IOException("WebDAV 未返回有效属性，无法确认目录内容")
             if (href.trim().endsWith("/")) isDir = true
             out += Prop(id, isDir, size, etag)
         }
@@ -178,7 +210,7 @@ class WebDavDrive(
     }
 
     private fun norm(p: String): String {
-        val s = "/" + p.split('/').filter { it.isNotEmpty() }.joinToString("/")
+        val s = "/" + safeSegments(p).joinToString("/")
         return s
     }
 
@@ -186,7 +218,7 @@ class WebDavDrive(
     private fun stat(path: String): Boolean? {
         val (code, props) = propfind(path, 0, asDir = false)
         if (code == 404) return null
-        return props.firstOrNull()?.isDir ?: false
+        return props.firstOrNull { norm(it.id) == norm(path) }?.isDir ?: throw IOException("WebDAV 无法确认资源类型")
     }
 
     private fun moveTo(from: String, to: String): String {
@@ -203,7 +235,7 @@ class WebDavDrive(
 
     override suspend fun rename(fileId: String, newName: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            require(newName.isNotBlank() && '/' !in newName) { "名称不合法：$newName" }
+            require(newName == com.tamu.pan123.data.naming.Naming.execName(newName)) { "名称不合法：$newName" }
             val from = norm(fileId)
             val to = DrivePaths.join(DrivePaths.parentOf(from), newName)
             if (to == from) from else moveTo(from, to)
@@ -240,7 +272,7 @@ class WebDavDrive(
 
     override suspend fun mkdir(parentId: String, name: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            require(name.isNotBlank() && '/' !in name) { "名称不合法：$name" }
+            require(name == com.tamu.pan123.data.naming.Naming.execName(name)) { "名称不合法：$name" }
             val path = DrivePaths.join(norm(parentId), name)
             when (stat(path)) {
                 true -> return@runCatching path // 已存在的文件夹直接复用
@@ -260,7 +292,7 @@ class WebDavDrive(
 
     override suspend fun upload(parentId: String, name: String, data: ByteArray): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            require(name.isNotBlank() && '/' !in name) { "名称不合法：$name" }
+            require(name == com.tamu.pan123.data.naming.Naming.execName(name)) { "名称不合法：$name" }
             val path = DrivePaths.join(norm(parentId), name)
             if (stat(path) != null) return@runCatching "已存在"
             val type = when (name.substringAfterLast('.').lowercase()) {

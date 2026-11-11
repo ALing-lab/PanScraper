@@ -110,7 +110,7 @@ fun TaskItemsScreen(
     // 失败页：勾选
     val failedIds = remember(shown, isFail) { if (isFail) shown.map { it.id }.toSet() else emptySet() }
     var selected by remember(failedIds) { mutableStateOf(initialSelected?.intersect(failedIds) ?: failedIds) }
-    val plan = remember(failedIds) { if (isFail) PlanStore.loadOrNull() else null }
+    val plan = remember(failedIds, r) { if (isFail && r != null) runCatching { PlanStore.forTask(r) }.getOrNull() else null }
     fun toggle(ids: Collection<String>, on: Boolean) { selected = FailedRetry.toggle(selected, ids, on, failedIds, plan) }
     val allOn = isFail && selected.size == failedIds.size && failedIds.isNotEmpty()
 
@@ -200,7 +200,10 @@ fun TaskItemsScreen(
                     if (!ok) return@IosRow
                     val want = (pending + selected).toSet()
                     val ordered = items.map { it.id }.filter { it in want }
-                    val ids = FailedRetry.retryIds(ordered, plan ?: PlanStore.loadOrNull())
+                    val boundPlan = runCatching { PlanStore.forTask(r) }.getOrElse {
+                        ExecutionEngine.reportStartError(it.message ?: "任务计划不可用"); return@IosRow
+                    }
+                    val ids = FailedRetry.retryIds(ordered, boundPlan)
                     scope.launch {
                         // 暂停中的任务先结束，等它收尾后再开始新的一轮（同一时间只跑一个任务）
                         if (r.status == TaskRun.STATUS_PAUSED) {
@@ -209,7 +212,7 @@ fun TaskItemsScreen(
                                 ExecutionEngine.live.first { it == null || it.status == TaskRun.STATUS_DONE }
                             }
                         }
-                        ExecForegroundService.start(ctx, ids)
+                        ExecForegroundService.start(ctx, ids, plan = boundPlan)
                         nav.popBackStack()
                     }
                 }
@@ -343,7 +346,7 @@ private fun phaseLine(r: TaskRun, items: List<TaskItem>): String = buildString {
 /** 旧版本的任务记录没有逐项快照：按计划里的状态补出来。 */
 private fun itemsOf(r: TaskRun): List<TaskItem> {
     if (r.items.isNotEmpty()) return r.items
-    val plan = PlanStore.loadOrNull() ?: return emptyList()
+    val plan = runCatching { PlanStore.forTask(r) }.getOrNull() ?: return emptyList()
     val byId = plan.actions.associateBy { it.id }
     val names = plan.groups.associate { it.id to it.title.ifBlank { it.folderName } }
     val folders = plan.groups.associate { it.id to (it.folderNewName ?: it.folderName) }

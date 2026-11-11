@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -135,11 +136,15 @@ fun AppRoot(initialTab: Tab = Tab.CLOUD) {
 @Composable
 private fun TabHost(tab: Tab, nav: NavHostController) {
     val popState = remember { mutableStateOf(false) }
-    val stack by nav.currentBackStack.collectAsState()
-    val last = remember { IntArray(1) }
-    // 在组合阶段同步计算方向，保证转场第一帧就用对的方向
-    val size = stack.size
-    if (size != last[0]) { if (last[0] != 0) popState.value = size < last[0]; last[0] = size }
+    val entry by nav.currentBackStackEntryAsState()
+    val seen = remember { mutableListOf<String>() }
+    entry?.id?.let { id ->
+        if (seen.lastOrNull() != id) {
+            val index = seen.indexOf(id)
+            popState.value = index >= 0
+            if (index >= 0) seen.subList(index + 1, seen.size).clear() else seen.add(id)
+        }
+    }
     CompositionLocalProvider(LocalNavPop provides popState) {
     NavHost(
         modifier = Modifier.fillMaxSize().clipToBounds(),

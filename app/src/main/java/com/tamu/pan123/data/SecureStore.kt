@@ -183,7 +183,7 @@ object SecureStore {
         if (token.isBlank() || token.count { it == '.' } < 2) return null
         return try {
             val part = token.split('.')[1]
-            val pad = part + "=".repeat((-part.length) % 4)
+            val pad = part + "=".repeat((4 - part.length % 4) % 4)
             val json = String(Base64.getUrlDecoder().decode(pad))
             JSONObject(json).optLong("exp", 0L).takeIf { it > 0 }
         } catch (_: Exception) { null }

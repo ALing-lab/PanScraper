@@ -74,6 +74,7 @@ object ExecutionEngine {
             startedAt = System.currentTimeMillis(),
             finishedAt = System.currentTimeMillis(),
             message = message,
+            terminalError = message,
         )
         TaskStore.save(run)
         _live.value = run
@@ -97,12 +98,19 @@ object ExecutionEngine {
         /** 进程被系统杀掉后恢复一个「已暂停」的任务：恢复后仍保持暂停，等用户点继续。 */
         startPaused: Boolean = false,
     ): TaskSummary = mutex.withLock {
-        withContext(Dispatchers.IO) {
+        com.tamu.pan123.data.WorkGuard.work { withContext(Dispatchers.IO) {
+            val planFile = PlanStore.fileFor(plan)
+            val planKey = PlanStore.key(plan)
             stopRequested = false
             pauseRequested = startPaused
             val drive = driveOverride ?: DriveRegistry.forAccount(plan.accountId)
 
-            val existing = if (resumeExisting) TaskStore.load() else null
+            val previous = TaskStore.load()?.takeIf {
+                it.planName == planFile.name && it.accountId == drive.accountId &&
+                    (it.planKey == planKey || (it.planKey.isBlank() && it.actionIds.all { id -> plan.actions.any { a -> a.id == id } }))
+            }
+            check(!resumeExisting || previous != null) { "恢复任务与计划不匹配，请重新打开预览" }
+            val existing = if (resumeExisting) previous else null
             val ids = when {
                 actionIds != null -> actionIds
                 existing != null && existing.status in listOf(TaskRun.STATUS_RUNNING, TaskRun.STATUS_PAUSED, TaskRun.STATUS_STOPPING) ->
@@ -127,11 +135,11 @@ object ExecutionEngine {
                 return@withContext TaskSummary(0, 0, 0, 0)
             }
 
-            val previous = existing ?: TaskStore.load()
             val started = existing?.startedAt?.takeIf { it > 0 } ?: System.currentTimeMillis()
             var run = TaskRun(
                 id = existing?.id ?: UUID.randomUUID().toString().take(8),
-                planName = PlanStore.latestFile()?.name ?: "plan",
+                planName = planFile.name,
+                planKey = planKey,
                 actionIds = ids,
                 status = TaskRun.STATUS_RUNNING,
                 startedAt = started,
@@ -140,10 +148,10 @@ object ExecutionEngine {
                 skipped = existing?.skipped ?: 0,
                 consecutiveFails = 0,
                 message = "开始执行…",
-                mkdirRefs = existing?.mkdirRefs ?: emptyMap(),
-                idRemap = existing?.idRemap ?: emptyMap(),
+                mkdirRefs = previous?.mkdirRefs ?: emptyMap(),
+                idRemap = previous?.idRemap ?: emptyMap(),
                 accountId = drive.accountId,
-                failedIds = existing?.failedIds ?: emptyList(),
+                failedIds = previous?.failedIds ?: emptyList(),
             )
             persist(run)
 
@@ -228,7 +236,15 @@ object ExecutionEngine {
                         delay(SETTLE_MS)
                     }
                 }
-                var result = executeOne(drive, action, refs, remap)
+                suspend fun permission(): Boolean {
+                    while (pauseRequested && !stopRequested) delay(100)
+                    return !stopRequested
+                }
+                if (!permission()) { stoppedEarly = true; break }
+                val unmet = if (action.op == "delete") com.tamu.pan123.data.scrape.PlanSelection.deleteNeeds(action, planActions.values.toList())
+                    .filter { !it.done || it.error != null } else emptyList()
+                var result = if (unmet.isNotEmpty()) Result.failure(IllegalStateException("仍有 ${unmet.size} 个视频或字幕未移出，为安全起见未删除"))
+                    else executeOne(drive, action, refs, remap)
                 if (result.isFailure && action.op == "artwork") {
                     for ((i, wait) in UPLOAD_RETRY_MS.withIndex()) {
                         if (stopRequested) break
@@ -237,6 +253,7 @@ object ExecutionEngine {
                         run = run.copy(message = "上传 ${action.newName} 失败，${wait / 1000} 秒后重试（${i + 1}/${UPLOAD_RETRY_MS.size}）")
                         persist(run)
                         delay(if (OP_SLEEP_MS == 0L) 0L else wait)
+                        if (!permission()) { stoppedEarly = true; break }
                         result = executeOne(drive, action, refs, remap)
                         if (result.isSuccess) break
                     }
@@ -250,7 +267,7 @@ object ExecutionEngine {
                     if (!existed) newlyOk += id
                     setItem(id) { it.copy(status = if (existed) TaskItem.SKIP else TaskItem.OK, at = System.currentTimeMillis(), error = null,
                         note = if (existed) "网盘里已有同名文件，未覆盖" else null) }
-                    markPlanAction(id) { it.copy(done = true, error = null, note = result.getOrNull()) }
+                    markPlanAction(planFile, planKey, id) { it.copy(done = true, error = null, note = result.getOrNull()) }
                     planActions[id]?.let { planActions[id] = it.copy(done = true, error = null) }
                     // 若 mkdir，refs 已在 executeOne 写入
                     run = counted(run).copy(consecutiveFails = 0,
@@ -260,7 +277,7 @@ object ExecutionEngine {
                     if (id !in failed) failed += id
                     val err = result.exceptionOrNull()?.let { e -> e.message ?: e.javaClass.simpleName } ?: "未知错误"
                     NetLog.error("exec", "${labelOf(action)} 失败：$err")
-                    markPlanAction(id) { it.copy(done = false, error = err) }
+                    markPlanAction(planFile, planKey, id) { it.copy(done = false, error = err) }
                     planActions[id]?.let { planActions[id] = it.copy(error = err) }
                     setItem(id) { it.copy(status = TaskItem.FAIL, at = System.currentTimeMillis(), error = err) }
                     run = counted(run).copy(consecutiveFails = streak,
@@ -297,6 +314,7 @@ object ExecutionEngine {
             )
             run = run.copy(
                 status = TaskRun.STATUS_DONE,
+                userStopped = stopRequested || stoppedEarly,
                 finishedAt = System.currentTimeMillis(),
                 elapsedMs = elapsed,
                 mkdirRefs = refs.toMap(),
@@ -317,10 +335,10 @@ object ExecutionEngine {
                 },
             )
             persist(run)
-            runCatching { com.tamu.pan123.data.history.HistoryStore.recordRun(plan, planActions, newlyOk) }
+            runCatching { com.tamu.pan123.data.history.HistoryStore.recordRun(plan, planActions, newlyOk, idRemap = remap.snapshot(), pathIds = drive.kind.idsArePaths) }
                 .onFailure { NetLog.error("history", it.message ?: "记录历史失败") }
             summary
-        }
+        } }
     }
 
     private val EXEC_OPS = setOf("rename", "mkdir", "move", "artwork", "delete")
@@ -358,11 +376,9 @@ object ExecutionEngine {
         _live.value = r
     }
 
-    private fun markPlanAction(id: String, transform: (PlanAction) -> PlanAction) {
-        runCatching {
-            PlanStore.update { plan ->
-                plan.copy(actions = plan.actions.map { if (it.id == id) transform(it) else it })
-            }
+    private fun markPlanAction(file: java.io.File, key: String, id: String, transform: (PlanAction) -> PlanAction) {
+        PlanStore.updateBound(file, key) { plan ->
+            plan.copy(actions = plan.actions.map { if (it.id == id) transform(it) else it })
         }
     }
 
@@ -412,7 +428,7 @@ object ExecutionEngine {
                         else remap.resolve(action.parentId)) ?: error(if (action.destRef != null) "目标文件夹 ${action.destLabel ?: ""} 还没建好" else "缺少 parentId")
                     val name = com.tamu.pan123.data.naming.Naming.execName(action.newName)
                     // 已存在则跳过（不覆盖）
-                    val exists = runCatching { drive.exists(parent, name) }.getOrDefault(false)
+                    val exists = drive.exists(parent, name)
                     if (exists) return Result.success("已存在")
                     val bytes = artworkOverride?.invoke(action) ?: ArtworkFetcher.contentFor(action)
                     val msg = drive.upload(parent, name, bytes).getOrThrow()

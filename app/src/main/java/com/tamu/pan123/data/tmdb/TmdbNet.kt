@@ -25,7 +25,7 @@ data class TmdbNetConfig(
     /** 图片备用地址（镜像 / 反代）：image.tmdb.org 连不上时自动改用。 */
     val imageFallback: String = "",
     /** 官方图片地址都连不上时，自动试公共图片镜像（img.amodb.dev、wsrv.nl）。 */
-    val publicMirrors: Boolean = true,
+    val publicMirrors: Boolean = false,
     /** 用阿里 / 腾讯 DoH 解析 TMDB 域名（绕过 DNS 污染）；DoH 失败时回落系统 DNS。 */
     val doh: Boolean = true,
     /** none / http / socks */
@@ -189,7 +189,10 @@ object TmdbNet {
                 if (u.host == "media.themoviedb.org") rb.header("Referer", "https://www.themoviedb.org/")
                 val r = chain.proceed(rb.build())
                 val type = r.header("Content-Type").orEmpty()
-                val good = r.isSuccessful && !type.startsWith("text/")
+                val mime = type.substringBefore(';').trim().lowercase()
+                val good = r.isSuccessful && (mime.startsWith("image/") ||
+                    (mime in setOf("", "application/octet-stream") &&
+                        com.tamu.pan123.data.exec.ImageBytes.looksLikeImage(r.peekBody(16).bytes())))
                 if (good) {
                     preferredImageBase = baseOf(c, u) ?: preferredImageBase
                     return@Interceptor r

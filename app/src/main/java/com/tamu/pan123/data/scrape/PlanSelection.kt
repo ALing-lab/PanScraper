@@ -12,7 +12,20 @@ object PlanSelection {
 
     /** 删除多余文件夹前必须先完成的移动（把视频 / 字幕从这个文件夹移走）。 */
     fun deleteNeeds(del: PlanAction, all: List<PlanAction>): List<PlanAction> =
-        if (del.op != "delete") emptyList() else all.filter { it.op == "move" && it.parentId == del.fileId && it.kind != "cleanup" }
+        if (del.op != "delete" || del.fileId == null) emptyList() else all.filter { m ->
+            if (m.op != "move" || m.kind == "cleanup") false else {
+                var parent = m.parentId
+                val seen = mutableSetOf<String>()
+                var inside = false
+                while (parent != null && seen.add(parent)) {
+                    if (parent == del.fileId || (del.fileId.startsWith("/") && parent.startsWith(del.fileId.trimEnd('/') + "/"))) {
+                        inside = true; break
+                    }
+                    parent = all.firstOrNull { it.fileId == parent && (it.kind == "folder" || it.op == "delete") }?.parentId
+                }
+                inside
+            }
+        }
 
     /**
      * move 依赖的 mkdir（同分组、同父目录、名字等于 destLabel，且 move 没有固定目标 ID）。
@@ -37,8 +50,11 @@ object PlanSelection {
     fun set(plan: ScrapePlan, ids: Collection<String>, on: Boolean): ScrapePlan {
         val target = ids.toMutableSet()
         val byId = plan.actions.associateBy { it.id }
+        var previousSize: Int
+        do {
+        previousSize = target.size
         if (on) {
-            for (id in ids) {
+            for (id in target.toList()) {
                 val a = byId[id] ?: continue
                 dependencyOf(a, plan.actions)?.let { target += it.id }
                 for (m in deleteNeeds(a, plan.actions)) {
@@ -47,7 +63,7 @@ object PlanSelection {
                 }
             }
         } else {
-            val mkdirs = ids.mapNotNull { byId[it] }.filter { it.op == "mkdir" }
+            val mkdirs = target.mapNotNull { byId[it] }.filter { it.op == "mkdir" }
             if (mkdirs.isNotEmpty()) plan.actions.filter { it.op == "move" }.forEach { m ->
                 val dep = dependencyOf(m, plan.actions)
                 if (dep != null && mkdirs.any { it.id == dep.id }) target += m.id
@@ -56,11 +72,12 @@ object PlanSelection {
                 if (mkdirs.any { it.id == a.destRef }) target += a.id
             }
             // 取消移动 → 依赖这些移动的删除也取消（否则文件夹里还有视频，不会删除）
-            val moves = ids.mapNotNull { byId[it] }.filter { it.op == "move" }
+            val moves = target.mapNotNull { byId[it] }.filter { it.op == "move" }
             if (moves.isNotEmpty()) plan.actions.filter { it.op == "delete" }.forEach { d ->
                 if (deleteNeeds(d, plan.actions).any { m -> moves.any { it.id == m.id } }) target += d.id
             }
         }
+        } while (target.size != previousSize)
         return plan.copy(actions = plan.actions.map {
             if (it.id in target && executable(it)) it.copy(selected = on) else it
         })
@@ -72,8 +89,13 @@ object PlanSelection {
     /** 分组勾选状态：全选 / 部分 / 未选 / 无可执行项。 */
     enum class Tri { ALL, SOME, NONE, EMPTY }
 
+    fun groupIds(plan: ScrapePlan, groupId: String): List<String> = plan.actions.filter {
+        it.groupId == groupId && it.kind != "cleanup" && it.op != "delete" && executable(it)
+    }.map { it.id }
+
     fun groupState(plan: ScrapePlan, groupId: String): Tri {
-        val acts = plan.actions.filter { it.groupId == groupId && executable(it) }
+        val ids = groupIds(plan, groupId).toSet()
+        val acts = plan.actions.filter { it.id in ids }
         if (acts.isEmpty()) return Tri.EMPTY
         val n = acts.count { it.selected }
         return when (n) { 0 -> Tri.NONE; acts.size -> Tri.ALL; else -> Tri.SOME }

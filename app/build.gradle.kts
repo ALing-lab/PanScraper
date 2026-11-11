@@ -16,8 +16,8 @@ android {
         applicationId = "com.tamu.pan123scraper"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.3.5"
+        versionCode = 17
+        versionName = "0.3.6"
     }
     // 正式签名：从仓库外的 keystore.properties 读取（默认 /workspace/signing/keystore.properties，
     // 也可用环境变量 PANSCRAPER_SIGNING_PROPS 指定）。文件不存在时 release 不签名，开源构建照常能编译。
@@ -75,8 +75,8 @@ dependencies {
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
-    implementation("org.lz4:lz4-java:1.8.0")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("at.yawk.lz4:lz4-java:1.14.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.87")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("io.coil-kt:coil-compose:2.7.0")

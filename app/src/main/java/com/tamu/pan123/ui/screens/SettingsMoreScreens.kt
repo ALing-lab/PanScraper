@@ -63,15 +63,13 @@ private fun Modifier.graphicsScale(f: Float) = this.then(androidx.compose.ui.Mod
 
 /** 命名的实时示例（剧集 + 电影），按两个开关的组合生成。 */
 internal fun namingExample(simple: Boolean, tmdb: Boolean): String {
-    val ps = Naming.simpleNaming; val pt = Naming.tmdbInFileName
-    return try {
-        Naming.simpleNaming = simple; Naming.tmdbInFileName = tmdb
+    return Naming.configured(simple, tmdb) {
         val tvStem = "Que.Gu.2026.S01E02.2160p.WEB-DL.HDR10.DDP5.1"
         val mvStem = "Inception.2010.2160p.UHD.BluRay.REMUX.HDR10.TrueHD.Atmos"
         val tv = Naming.buildEpisodeBase("雀骨", "2026", 1, 2, MediaParse.parseMedia(tvStem), 295558)
         val mv = Naming.buildMovieBase("盗梦空间", "2010", MediaParse.parseMedia(mvStem), mvStem, 27205)
         "$tv.mp4\n$tv.zh.srt\n$mv.mkv"
-    } finally { Naming.simpleNaming = ps; Naming.tmdbInFileName = pt }
+    }
 }
 
 internal const val SIMPLE_NAMING_DESC = "文件名只保留基本信息：剧集为「名称.年份.SxxEyy」，电影为「名称.年份.分辨率」。字幕会跟着视频一起改名。"
@@ -345,7 +343,7 @@ val OSS_LIBS = listOf(
     OssLib("AndroidX WebKit", "androidx.webkit:webkit", "Apache License 2.0", "apache-2.0.txt", "https://developer.android.com/jetpack/androidx/releases/webkit"),
     OssLib("OkHttp / OkHttp DNS-over-HTTPS / Okio", "com.squareup.okhttp3, com.squareup.okio", "Apache License 2.0", "apache-2.0.txt", "https://square.github.io/okhttp/"),
     OssLib("Coil", "io.coil-kt:coil-compose", "Apache License 2.0", "apache-2.0.txt", "https://coil-kt.github.io/coil/"),
-    OssLib("LZ4 Java", "org.lz4:lz4-java", "Apache License 2.0", "apache-2.0.txt", "https://github.com/lz4/lz4-java"),
+    OssLib("LZ4 Java", "at.yawk.lz4:lz4-java", "Apache License 2.0", "apache-2.0.txt", "https://github.com/yawkat/lz4-java"),
     OssLib("Bouncy Castle", "org.bouncycastle:bcprov-jdk18on", "MIT（Bouncy Castle Licence）", "mit-bouncycastle.txt", "https://www.bouncycastle.org/licence.html"),
     OssLib("Gson", "com.google.code.gson:gson（Tink 依赖）", "Apache License 2.0", "apache-2.0.txt", "https://github.com/google/gson"),
     OssLib("Tink", "com.google.crypto.tink:tink-android（Security Crypto 依赖）", "Apache License 2.0", "apache-2.0.txt", "https://github.com/tink-crypto/tink-java"),

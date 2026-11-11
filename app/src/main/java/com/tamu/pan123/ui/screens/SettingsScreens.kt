@@ -154,12 +154,10 @@ fun DataScreen(nav: NavHostController) {
             cancel = "取消",
             destructive = true,
             onConfirm = {
-                val n = AppDirs.clearAll()
-                TaskStore.clear()
-                PlanStore.reset()
+                runCatching { AppDirs.clearAll() }
+                    .onSuccess { n -> tick++; clearedMsg = "已清理 ${AppDirs.formatSize(n)}" }
+                    .onFailure { clearedMsg = it.message ?: "清理失败" }
                 confirm = false
-                tick++
-                clearedMsg = "已清理 ${AppDirs.formatSize(n)}"
             },
             onDismiss = { confirm = false },
         )

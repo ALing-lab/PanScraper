@@ -179,8 +179,8 @@ class Drive115(
     // ---------------- 扫码登录（无账号 cookie） ----------------
 
     suspend fun qrStart(): QrSession {
-        val (_, text) = get("$qrBase/api/1.0/web/1.0/token", withCookie = false)
-        val o = requireOk(200, text, "token")
+        val (status, text) = get("$qrBase/api/1.0/web/1.0/token", withCookie = false)
+        val o = requireOk(status, text, "token")
         if (o.optInt("state") != 1) throw P115ApiException(o.optInt("code"), errorText(o.optInt("code"), o.optString("message")))
         val d = o.getJSONObject("data")
         return QrSession(
@@ -192,12 +192,12 @@ class Drive115(
     }
 
     suspend fun qrStatus(s: QrSession): QrStatus {
-        val (_, text) = get(
+        val (status, text) = get(
             "$qrBase/get/status/",
             mapOf("uid" to s.uid, "time" to s.time.toString(), "sign" to s.sign, "_" to System.currentTimeMillis().toString()),
             withCookie = false,
         )
-        val o = requireOk(200, text, "status")
+        val o = requireOk(status, text, "status")
         if (o.optInt("state") != 1) {
             // 过期等也会走 data
             if (o.has("data")) {
@@ -216,8 +216,8 @@ class Drive115(
      */
     suspend fun qrLogin(s: QrSession, app: String = LOGIN_APP): P115Creds {
         val url = "$passportBase/app/1.0/$app/1.0/login/qrcode"
-        val (_, text) = postForm(url, mapOf("account" to s.uid, "app" to app), withCookie = false)
-        val o = requireOk(200, text, "login")
+        val (status, text) = postForm(url, mapOf("account" to s.uid, "app" to app), withCookie = false)
+        val o = requireOk(status, text, "login")
         if (o.optInt("state") != 1) throw P115ApiException(o.optInt("code"), errorText(o.optInt("code"), o.optString("message").ifBlank { o.optString("error") }))
         val d = o.getJSONObject("data")
         val cookie = d.getJSONObject("cookie")
@@ -242,7 +242,7 @@ class Drive115(
         var offset = 0
         val limit = 1150
         while (true) {
-            val (_, text) = get(
+            val (status, text) = get(
                 "$apiBase/files",
                 mapOf(
                     "aid" to "1", "cid" to cid, "o" to "user_ptime", "asc" to "1",
@@ -250,7 +250,7 @@ class Drive115(
                     "snap" to "0", "natsort" to "0", "record_open_time" to "1", "format" to "json", "fc_mix" to "0",
                 ),
             )
-            val o = requireOk(200, text, "list")
+            val o = requireOk(status, text, "list")
             checkState(o)
             // cid 校验：被踢到别的目录时 115 会返回别的 cid
             // 目录不存在时 115 会返回别的目录（通常是根目录）的内容：按空目录处理，避免误操作
@@ -280,19 +280,19 @@ class Drive115(
     }
 
     override suspend fun rename(fileId: String, newName: String): Result<String> = runCatching {
-        val (_, text) = postForm(
+        val (status, text) = postForm(
             "$apiBase/files/batch_rename",
             mapOf("fid" to fileId, "file_name" to newName, "files_new_name[$fileId]" to newName),
         )
-        checkState(requireOk(200, text, "rename"))
+        checkState(requireOk(status, text, "rename"))
         fileId
     }
 
     override suspend fun mkdir(parentId: String, name: String): Result<String> = runCatching {
         val pid = parentId.ifBlank { "0" }
         list(pid).firstOrNull { it.isDir && it.fileName.equals(name, true) }?.let { return@runCatching it.fileId }
-        val (_, text) = postForm("$apiBase/files/add", mapOf("pid" to pid, "cname" to name))
-        val o = requireOk(200, text, "mkdir")
+        val (status, text) = postForm("$apiBase/files/add", mapOf("pid" to pid, "cname" to name))
+        val o = requireOk(status, text, "mkdir")
         try {
             checkState(o)
         } catch (e: P115ApiException) {
@@ -309,8 +309,8 @@ class Drive115(
 
     override suspend fun move(fileId: String, destParentId: String): Result<String> = runCatching {
         val dest = destParentId.ifBlank { "0" }
-        val (_, text) = postForm("$apiBase/files/move", mapOf("pid" to dest, "fid[0]" to fileId))
-        checkState(requireOk(200, text, "move"))
+        val (status, text) = postForm("$apiBase/files/move", mapOf("pid" to dest, "fid[0]" to fileId))
+        checkState(requireOk(status, text, "move"))
         fileId
     }
 
@@ -318,8 +318,8 @@ class Drive115(
 
     /** 115 的「删除」= 移入回收站（rb/delete）。 */
     override suspend fun trash(fileId: String): Result<String> = runCatching {
-        val (_, text) = postForm("$apiBase/rb/delete", mapOf("fid[0]" to fileId, "ignore_warn" to "1"))
-        checkState(requireOk(200, text, "delete"))
+        val (status, text) = postForm("$apiBase/rb/delete", mapOf("fid[0]" to fileId, "ignore_warn" to "1"))
+        checkState(requireOk(status, text, "delete"))
         "已移入回收站"
     }
 
@@ -336,17 +336,18 @@ class Drive115(
                 putOss(init, token, data)
                 // 用 sha1 确认出现在目录里（最多等几秒）
                 repeat(5) {
-                    if (list(pid).any { !it.isDir && it.etag.equals(digest.quickId, true) }) return@runCatching "ok"
+                    if (list(pid).any { !it.isDir && it.fileName == name && it.etag.equals(digest.quickId, true) }) return@runCatching "ok"
                     delay(400)
                 }
-                "ok"
+                throw P115ApiException(-3, "115 上传结果未确认，请稍后核对目标文件再重试")
             }
             else -> throw P115ApiException(init.status, "115 上传初始化返回异常状态 ${init.status}")
         }
     }
 
     override suspend fun ping(): Boolean = runCatching {
-        val (_, text) = get(statusUrl, mapOf("ct" to "guide", "ac" to "status", "_" to System.currentTimeMillis().toString()))
+        val (status, text) = get(statusUrl, mapOf("ct" to "guide", "ac" to "status", "_" to System.currentTimeMillis().toString()))
+        if (status !in 200..299) return@runCatching false
         // 这个接口返回 {state:true/false}；也可能是 HTML。再退回列根目录
         val o = runCatching { JSONObject(text) }.getOrNull()
         if (o != null && o.has("state")) return@runCatching o.optBoolean("state")
@@ -388,8 +389,8 @@ class Drive115(
         if (c.userKey.isNotBlank() && c.userId != 0L) {
             cachedUserKey = c.userKey; cachedUserId = c.userId; return
         }
-        val (_, text) = postForm("$proApiBase/app/uploadinfo", emptyMap())
-        val o = requireOk(200, text, "uploadinfo")
+        val (status, text) = postForm("$proApiBase/app/uploadinfo", emptyMap())
+        val o = requireOk(status, text, "uploadinfo")
         checkState(o)
         cachedUserId = o.optLong("user_id").takeIf { it != 0L } ?: c.userId
         val key = o.optString("userkey")
@@ -487,8 +488,8 @@ class Drive115(
     }
 
     private suspend fun ossToken(): OssToken {
-        val (_, text) = get("$uploadBase/3.0/gettoken.php")
-        val o = requireOk(200, text, "osstoken")
+        val (status, text) = get("$uploadBase/3.0/gettoken.php")
+        val o = requireOk(status, text, "osstoken")
         if (o.optString("StatusCode") != "200" && !o.has("AccessKeyID")) {
             throw P115ApiException(-4, "115 获取上传凭证失败")
         }

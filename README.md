@@ -27,7 +27,7 @@
 - **命名**：默认保留分辨率、帧率、HDR、音轨（`DDP5.1`、`AAC2.0`、`TrueHD.Atmos`、`DTS-HD.MA5.1`、`FLAC`、`HIFI` …）；可选「简洁命名」（`雀骨.2026.S01E02.mp4`）及其子选项「播放器兼容命名」（`雀骨.2026.S01E02{tmdb-295558}.mp4`）。
 - **预览**：按操作类型分页（改名 / 建文件夹 / 移动 / 海报NFO / 删除 / 跳过 / 未匹配），按文件夹分组可折叠，逐项勾选；可对任意分组重新匹配 TMDB（电影 ↔ 剧集）。
 - **执行**：分阶段顺序执行（重命名 → 建文件夹 → 移动 → 海报/NFO → 删除），上传失败自动重试；任务页可查看进度 / 成功 / 失败 / 跳过明细，暂停后可继续，失败项可勾选后再次执行。
-- **历史记录**：执行成功的项目会记下来，下次扫描自动跳过、不再重复匹配 TMDB（设置里可关闭、可删除）。
+- **历史记录**：执行成功的项目会记下来，下次扫描复用匹配结果，并核验缺失海报、NFO 和整理操作（设置里可关闭、可删除）。
 - **网络**：TMDB 支持 DoH、代理、图片镜像回退；检查更新走 GitHub Releases。
 
 ## 截图
@@ -38,7 +38,13 @@
 
 ## 下载
 
-到 [Releases](https://github.com/ALing-lab/PanScraper/releases) 下载最新的 `PanScraper-vX.Y.Z.apk`。应用内「设置 → 关于 → 检查更新」也可以直接更新。
+0.3.6 修复了任务恢复、删除依赖、WebDAV 路径边界及网页登录兼容性，详见[修复与验证说明](docs/releases/v0.3.6.zh-CN.md)。
+
+到 [Releases](https://github.com/ALing-lab/PanScraper/releases) 下载最新的 `PanScraper-vX.Y.Z.apk`。应用内「设置 → 关于 → 检查更新」也可以直接更新。下载后可用随版本提供的 `SHA256SUMS.txt` 核对文件摘要：
+
+```bash
+sha256sum -c SHA256SUMS.txt
+```
 
 ## 使用前准备
 
@@ -51,9 +57,12 @@
 需要 JDK 17 和 Android SDK（compileSdk 35）。
 
 ```bash
-./gradlew testDebugUnitTest   # 单元测试 + Robolectric 截图测试
+./gradlew -I gradle/test-memory.init.gradle testDebugUnitTest  # 单元测试 + Robolectric 截图测试
+./gradlew lintDebug
 ./gradlew assembleDebug       # 输出 app/build/outputs/apk/debug/app-debug.apk
 ```
+
+测试内存配置使用单个 1500MB 测试 JVM；内存较小的机器请分开运行测试和 Release 构建。正式签名配置放在仓库外，通过 `PANSCRAPER_SIGNING_PROPS` 指定后执行 `./gradlew assembleRelease`。
 
 `local.properties`、签名文件、`dist/`、日志都已在 `.gitignore` 中排除，请勿提交。
 

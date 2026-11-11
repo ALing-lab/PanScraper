@@ -89,11 +89,13 @@ fun PreviewOpsScreen(
     var collapsed by remember { mutableStateOf(initialCollapsed) }
     val title = PREVIEW_OP_TYPES.firstOrNull { it.first == type }?.second ?: "操作"
     val p = plan
+    var saveError by remember { mutableStateOf<String?>(null) }
     fun commit(next: ScrapePlan) {
+        val before = plan ?: return
         plan = next
         if (planOverride == null) scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             planWriteLock.lock()
-            try { runCatching { PlanStore.update { cur -> cur.copy(actions = next.actions) } } } finally { planWriteLock.unlock() }
+            try { runCatching { PlanStore.mergeSelection(before, next) }.onFailure { saveError = "保存勾选失败：${it.message}" } } finally { planWriteLock.unlock() }
         }
     }
     val groups = p?.groups?.associateBy { it.id }.orEmpty()
@@ -115,6 +117,7 @@ fun PreviewOpsScreen(
         },
     ) {
         if (p == null) return@LargeTitlePage
+        if (saveError != null) item(key = "saveError") { Text(saveError!!, color = c.red, style = IosType.footnote, modifier = Modifier.padding(16.dp)) }
         if (acts.isEmpty()) {
             item(key = "empty") { EmptyState(Icons.Rounded.Inbox, "没有「$title」操作", "扫描后这一类的每一项会按文件夹列在这里。") }
             return@LargeTitlePage

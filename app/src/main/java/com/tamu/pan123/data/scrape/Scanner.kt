@@ -90,8 +90,9 @@ object Scanner {
                 scan(roots, fullDrive, cloud, preflightTmdb)
             } catch (_: CancellationException) {
                 // cancel() 已经更新了状态
-            } catch (_: Throwable) {
-                // scan() 已经写入 error 状态
+            } catch (e: Throwable) {
+                val cur = _progress.value
+                _progress.value = cur.copy(phase = "error", message = "扫描失败", error = e.message ?: e.javaClass.simpleName, step = "")
             }
         }
         return true
@@ -155,14 +156,16 @@ object Scanner {
      * 同时检测本应用以前生成、但与新匹配不符的文件，生成可选的「清理旧刮削文件」操作（默认不勾选，只移动不删除）。
      */
     suspend fun replanGroup(plan: ScrapePlan, groupId: String, info: MatchInfo, cloud: CloudDrive): ScrapePlan =
-        scanMutex.withLock { replanGroupLocked(plan, groupId, info, cloud) }
+        scanMutex.withLock { Naming.withSnapshot { com.tamu.pan123.data.WorkGuard.work { replanGroupLocked(plan, groupId, info, cloud) } } }
 
     private suspend fun replanGroupLocked(plan: ScrapePlan, groupId: String, info: MatchInfo, cloud: CloudDrive): ScrapePlan =
         withContext(Dispatchers.IO) {
             val old = plan.groups.firstOrNull { it.id == groupId } ?: error("找不到分组")
-            val folderId = old.folderId ?: error("这个分组不是文件夹，无法整体重新规划")
+            check(plan.actions.none { it.groupId == groupId && it.done }) { "该分组已有执行完成的操作，请重新扫描后再匹配" }
             drive = cloud
             listCache.clear()
+            visited.clear()
+            val folderId = old.folderId ?: return@withContext replanLooseLocked(plan, groupId, info, cloud)
             val oldActions = plan.actions.filter { it.groupId == groupId }
             val parentId = oldActions.firstOrNull { it.fileId == folderId && it.kind == "folder" }?.parentId
             val items = cloud.list(folderId)
@@ -180,7 +183,7 @@ object Scanner {
 
             // 规划用的条目：去掉过期产物（这样会重新规划正确的海报 / NFO）；改成电影时把 Season 文件夹里的视频 / 字幕也纳入改名
             val planItems = items.filter { it.fileName.lowercase() !in staleNames && !(toMovie && it in seasonDirs) } +
-                seasonKids.values.flatten().filter { !it.isDir }
+                seasonKids.values.flatten().filter { !it.isDir && (isVideo(it) || isSub(it)) }
 
             val actions = mutableListOf<PlanAction>()
             val groups = mutableListOf<PlanGroup>()
@@ -254,6 +257,34 @@ object Scanner {
                 stats = computeStats(newActions, newGroups))
         }
 
+    /** 散文件也重新生成整个分组，字幕、目标目录与元数据随新匹配更新。 */
+    private suspend fun replanLooseLocked(plan: ScrapePlan, groupId: String, info: MatchInfo, cloud: CloudDrive): ScrapePlan {
+        val oldActions = plan.actions.filter { it.groupId == groupId }
+        val source = oldActions.firstOrNull { it.kind == "file" && it.fileId != null }
+            ?: error("找不到源视频，请重新扫描")
+        val parent = source.parentId ?: error("缺少源文件夹，请重新扫描")
+        val items = cloud.list(parent)
+        check(items.any { it.fileId == source.fileId && isVideo(it) }) { "源视频已变化，请重新扫描" }
+        val kept = plan.actions.filter { it.groupId != groupId }.toMutableList()
+        // 原分组的 mkdir 可能被别的散电影共用，保留并交给实际依赖的分组。
+        for (mkdir in oldActions.filter { it.op == "mkdir" }) {
+            val dependent = kept.firstOrNull { PlanSelection.dependencyOf(it, plan.actions)?.id == mkdir.id }
+            if (dependent != null) kept += mkdir.copy(groupId = dependent.groupId)
+        }
+        val actions = mutableListOf<PlanAction>()
+        val groups = mutableListOf<PlanGroup>()
+        val flags = mutableListOf<String>()
+        planLooseFiles(CloudEntry(parent, "", true), items, actions, groups, flags,
+            items.map { it.fileName.lowercase() }.toMutableSet(), source.fileId to info, kept.filter { it.op == "mkdir" })
+        val combined = kept + actions
+        val allGroups = (plan.groups.filter { it.id != groupId } + groups).map { g ->
+            g.copy(itemIds = combined.filter { it.groupId == g.id }.map { it.id })
+        }
+        check(groups.isNotEmpty()) { "重新匹配未生成计划" }
+        return plan.copy(actions = combined, groups = allGroups, flags = plan.flags + flags,
+            stats = computeStats(combined, allGroups))
+    }
+
     const val TRASH_DIR = "_刮削旧文件"
 
     /** 本应用生成的、和新匹配不符的文件（只认应用自己会生成的文件名）。 */
@@ -275,13 +306,14 @@ object Scanner {
     @Volatile private var drive: CloudDrive = com.tamu.pan123.data.drive.PendingDrive(com.tamu.pan123.data.drive.ProviderKind.P123, "")
     /** 扫描 / 重新匹配共用 drive、listCache 等状态：同一时间只允许一个在跑，避免互相覆盖。 */
     private val scanMutex = kotlinx.coroutines.sync.Mutex()
+    private val visited = mutableSetOf<String>()
 
     suspend fun scan(
         roots: List<Pair<String, String>>, // id to name
         fullDrive: Boolean,
         cloud: CloudDrive = DriveRegistry.active(),
         preflightTmdb: Boolean = false,
-    ): ScrapePlan = scanMutex.withLock { scanLocked(roots, fullDrive, cloud, preflightTmdb) }
+    ): ScrapePlan = scanMutex.withLock { Naming.withSnapshot { com.tamu.pan123.data.WorkGuard.work { scanLocked(roots, fullDrive, cloud, preflightTmdb) } } }
 
     private suspend fun scanLocked(
         roots: List<Pair<String, String>>,
@@ -432,6 +464,7 @@ object Scanner {
     ): ScrapePlan {
         drive = cloud
         listCache.clear()
+        visited.clear()
         historySkipped = 0
         val actions = mutableListOf<PlanAction>()
         val groups = mutableListOf<PlanGroup>()
@@ -445,7 +478,7 @@ object Scanner {
             checkActive()
             prog("scan", "扫描：$rootName", idx, rootList.size, filesSeen, step = "读取目录：$rootName")
             val items = ls(rootId)
-            val rootEntry = CloudEntry(fileId = rootId, fileName = rootName, isDir = true)
+            val rootEntry = CloudEntry(fileId = rootId, fileName = rootName.trimEnd('/').substringAfterLast('/'), isDir = true)
             val role = if (fullDrive || rootId == cloud.rootId) Role.CONTAINER else classify(rootEntry, items)
             filesSeen += if (role == Role.CONTAINER) {
                 walkContainer(rootEntry, items, 0, actions, groups, flags) { done ->
@@ -458,7 +491,7 @@ object Scanner {
             prog("scan", "完成：$rootName", idx + 1, rootList.size, filesSeen)
         }
         checkActive()
-        if (historySkipped > 0) flags += "有 $historySkipped 个文件夹在历史记录里已整理过，已跳过（设置 › 历史记录 可关闭或删除记录）"
+        if (historySkipped > 0) flags += "有 $historySkipped 个文件夹复用了历史匹配，已重新检查缺失操作（设置 › 历史记录 可关闭或删除记录）"
 
         val stats = computeStats(actions, groups).copy(history = historySkipped)
         val plan = ScrapePlan(
@@ -486,6 +519,7 @@ object Scanner {
         actions: MutableList<PlanAction>, groups: MutableList<PlanGroup>, flags: MutableList<String>,
         onProgress: (Int) -> Unit = {},
     ): Int {
+        if (!visited.add(dir.fileId)) return 0
         var seen = 0
         val taken = items.map { it.fileName.lowercase() }.toMutableSet()
         if (items.any { isVideo(it) }) {
@@ -546,12 +580,13 @@ object Scanner {
         val root = Node(folder, items, null, 0)
         val out = mutableListOf(root)
         if (!descend) return out
+        val seen = mutableSetOf(folder.fileId)
         val queue = ArrayDeque(listOf(root))
         while (queue.isNotEmpty()) {
             val n = queue.removeFirst()
             if (n.depth >= maxDepth) continue
             for (d in n.items.filter { it.isDir }) {
-                if (ignoredDir(d.fileName)) continue
+                if (ignoredDir(d.fileName) || d.fileId in visited || !seen.add(d.fileId)) continue
                 if (out.size >= MAX_TREE_NODES) {
                     val f = truncatedFlag(folder.fileName)
                     if (flags != null && f !in flags) flags += f
@@ -612,7 +647,9 @@ object Scanner {
         rootTaken: MutableSet<String>,
         forced: MatchInfo? = null,
     ): Int {
+        if (!visited.add(folder.fileId)) return 0
         val tree = buildTree(folder, items, descend = forced?.kind != "movie", flags = flags)
+        tree.drop(1).forEach { visited.add(it.id) }
         val allVideos = tree.flatMap { n -> n.items.filter { isVideo(it) } }
         if (allVideos.isEmpty()) {
             flags += "「${folder.fileName}」没有视频文件，跳过"
@@ -623,11 +660,7 @@ object Scanner {
         if (forced == null) {
             val hit = runCatching { historyLookup?.invoke(drive.accountId, drive.kind.idsArePaths, folder.fileId, folder.fileName) }.getOrNull()
             if (hit != null) {
-                val known = hit.files.map { it.lowercase() }.toSet()
-                if (allVideos.all { it.fileName.lowercase() in known }) {
-                    historySkipped++
-                    return allVideos.size
-                }
+                historySkipped++ // 只复用身份，仍核验字幕、目录和缺失的海报 / NFO
                 remembered = MatchInfo(hit.kind, hit.tmdbId, hit.title, hit.year)
             }
         }
@@ -775,7 +808,7 @@ object Scanner {
         for (v in vids) {
             val media = MediaParse.parseMedia(v.stem)
             val base = Naming.buildEpisodeBase(show.title, show.year, v.season, v.episode, media, show.id)
-            val target = Naming.claim(base + v.ext, v.e.fileName, takenFor(v.target!!)) ?: continue
+            val target = Naming.claim(base + v.ext, if (v.node.id == v.target!!.dirId) v.e.fileName else "", takenFor(v.target!!)) ?: continue
             v.newName = target
             v.newBase = Naming.splitNameExt(target).first
             val op = if (target == v.e.fileName) "skip" else "rename"
@@ -808,7 +841,7 @@ object Scanner {
                 }
                 val m = match
                 if (m == null) { flags += "字幕找不到对应的视频，未改名：${s.fileName}"; continue }
-                val want = Naming.claim(m.newBase + (if (lang.isNotEmpty()) ".$lang" else "") + ext, s.fileName, takenFor(m.target!!)) ?: continue
+                val want = Naming.claim(m.newBase + (if (lang.isNotEmpty()) ".$lang" else "") + ext, if (n.id == m.target!!.dirId) s.fileName else "", takenFor(m.target!!)) ?: continue
                 if (want != s.fileName) actions += PlanAction(aid(), "rename", gid, s.fileId, n.id, s.fileName, want, kind = "subtitle")
                 subsOf.getOrPut(m) { mutableListOf() } += s to want
             }
@@ -850,7 +883,7 @@ object Scanner {
         val virtualItems = root.items.filter { !it.isDir } + seasonDirsAfter
         val itemIds = mutableListOf<String>()
         planArtwork(folder.fileId, folder.fileName, show, gid, actions, itemIds, virtualItems,
-            newSeasonDirs.mapValues { (s, id) -> id to Naming.seasonDirName(s) })
+            newSeasonDirs.mapValues { (s, id) -> id to Naming.seasonDirName(s) }, tree.associate { it.id to it.items })
 
         val mismatch = forced == null && remembered == null && matchedBy > 0 && folderTitleMismatch(folder.fileName, show.title)
         val conf = when {
@@ -949,7 +982,7 @@ object Scanner {
         val subsOf = HashMap<MovieVid, MutableList<Pair<CloudEntry, String>>>()
         for (n in tree) for (s in n.items.filter { isSub(it) }) {
             val (stem, ext) = Naming.splitNameExt(s.fileName)
-            val local = matched.filter { it.node === n }.ifEmpty { matched }
+            val local = matched.filter { it.node === n }
             var hit: MovieVid? = null
             var rest = ""
             loop@ for (useOld in listOf(true, false)) {
@@ -970,7 +1003,7 @@ object Scanner {
                     if (c.size == 1) { hit = c[0]; rest = lang }
                 }
             }
-            if (hit == null && local.size == 1) { hit = local[0]; rest = Naming.langSuffix(stem) }
+            if (hit == null && local.size == 1 && mv.count { it.node === n } == 1) { hit = local[0]; rest = Naming.langSuffix(stem) }
             val h = hit
             if (h == null) { flags += "字幕找不到对应的视频，未改名：${s.fileName}"; continue }
             val want = Naming.claim(h.newBase + (if (rest.isNotEmpty()) ".$rest" else "") + ext, s.fileName, taken) ?: continue
@@ -1116,6 +1149,7 @@ object Scanner {
         actions: MutableList<PlanAction>, groups: MutableList<PlanGroup>, flags: MutableList<String>,
         rootTaken: MutableSet<String>, renameFolder: Boolean,
     ): Int {
+        if (!visited.add(folder.fileId)) return 0
         // season folder at root: resolve from episodes
         val videos = items.filter { isVideo(it) }
         if (videos.isEmpty()) return 0
@@ -1144,15 +1178,20 @@ object Scanner {
         groups: MutableList<PlanGroup>,
         flags: MutableList<String>,
         taken: MutableSet<String>,
+        forced: Pair<String?, MatchInfo>? = null,
+        sharedMkdirs: List<PlanAction> = emptyList(),
     ): Int {
         var seen = 0
         val folderMade = HashMap<Int, Pair<String?, String?>>() // tmdbId → (existing dir id, mkdir id)
+        sharedMkdirs.filter { it.parentId == dir.fileId && it.tmdbId != null }.forEach {
+            folderMade[it.tmdbId!!] = null to it.id
+        }
         for (it in items) {
-            if (!isVideo(it)) continue
+            if (!isVideo(it) || (forced != null && it.fileId != forced.first)) continue
             val (stem, ext) = Naming.splitNameExt(it.fileName)
             seen++
             val ep = Naming.parseEpisode(stem)
-            val info = if (ep != null) tmdb.show(listOf(stem), null).first else tmdb.movie(stem, emptyList(), null)
+            val info = forced?.second ?: if (ep != null) tmdb.show(listOf(stem), null).first else tmdb.movie(stem, emptyList(), null)
             if (info == null) {
                 val gid = "unmatched-loose-${it.fileId}"
                 groups += PlanGroup(gid, "unmatched", title = it.fileName, note = "散文件未匹配")
@@ -1164,7 +1203,14 @@ object Scanner {
             val start = actions.size
             val parent = it.parentFileId ?: dir.fileId
             if (info.kind == "tv") {
-                val season = ep!!.first ?: 1
+                if (ep == null) {
+                    actions += PlanAction(aid(), "unmatched", gid, it.fileId, parent, it.fileName,
+                        kind = "file", mediaKind = "tv", tmdbId = info.id, note = "认不出集数，请先补充 SxxEyy 后重新扫描")
+                    groups += PlanGroup(gid, "tv", info.id, info.title, info.year, info.posterPath,
+                        itemIds = actions.subList(start, actions.size).map { a -> a.id }, note = "无集数，未操作")
+                    continue
+                }
+                val season = ep.first ?: 1
                 val base = Naming.buildEpisodeBase(info.title, info.year, season, ep.second, media, info.id)
                 val target = Naming.claim(base + ext, it.fileName, taken) ?: continue
                 actions += PlanAction(aid(), if (target == it.fileName) "skip" else "rename", gid, it.fileId, parent, it.fileName, target,
@@ -1333,7 +1379,7 @@ object Scanner {
             img.containsMatchIn(it) && (it.substringBeforeLast('.') in setOf("fanart", "backdrop", "background") ||
                 it.substringBeforeLast('.').endsWith("-fanart"))
         }
-        val hasNfo = files.any { it.endsWith(".nfo") }
+        val hasNfo = files.any { it.endsWith(".nfo") && it !in setOf("season.nfo", "tvshow.nfo") }
         fun add(name: String, kind: String, url: String? = null) {
             val id = aid()
             actions += PlanAction(id, "artwork", gid, parentId = folderId, newName = name, kind = kind,
@@ -1349,6 +1395,7 @@ object Scanner {
         folderId: String, folderName: String, show: MatchInfo, gid: String,
         actions: MutableList<PlanAction>, itemIds: MutableList<String>, items: List<CloudEntry>,
         newSeasonDirs: Map<Int, Pair<String, String>> = emptyMap(), // 季号 → (mkdir 操作 ID, 文件夹名)
+        seasonItems: Map<String, List<CloudEntry>> = emptyMap(),
     ) {
         val have = items.map { it.fileName.lowercase() }.toSet()
         val equiv = mapOf(
@@ -1379,13 +1426,14 @@ object Scanner {
         for (d in items.filter { it.isDir }) {
             val n = Naming.seasonFromName(d.fileName) ?: continue
             val posterName = if (n == 0) "season-specials-poster.jpg" else "season%02d-poster.jpg".format(n)
-            if (have.none { it.matches(Regex("""(?i)season0*$n(?:-poster)?\.(jpg|jpeg|png)""")) }) {
+            if (posterName !in have && have.none { it.matches(Regex("""(?i)season0*$n(?:-poster)?\.(jpg|jpeg|png)""")) }) {
                 val id = aid()
                 actions += PlanAction(id, "artwork", gid, parentId = folderId, newName = posterName, kind = "image",
                     season = n, tmdbId = show.id, note = "季海报（执行时下载）")
                 itemIds += id
             }
-            // season.nfo：执行时若已存在会被上传前检查跳过；规划阶段不列目录内文件以免额外请求
+            // 目录树已读取季内容，直接核验，不需要额外网络请求。
+            if (seasonItems[d.fileId].orEmpty().any { !it.isDir && it.fileName.equals("season.nfo", true) }) continue
             val id = aid()
             actions += PlanAction(id, "artwork", gid, parentId = d.fileId, newName = "season.nfo", kind = "season_nfo",
                 season = n, tmdbId = show.id, note = "若季文件夹尚无 season.nfo")
@@ -1394,7 +1442,7 @@ object Scanner {
         // 执行阶段才新建的季文件夹：季海报放剧集根目录，season.nfo 等文件夹建好后上传进去
         for ((n, ref) in newSeasonDirs) {
             val posterName = if (n == 0) "season-specials-poster.jpg" else "season%02d-poster.jpg".format(n)
-            if (have.none { it.matches(Regex("""(?i)season0*$n(?:-poster)?\.(jpg|jpeg|png)""")) } && posterName !in have) {
+            if (posterName !in have && have.none { it.matches(Regex("""(?i)season0*$n(?:-poster)?\.(jpg|jpeg|png)""")) } && posterName !in have) {
                 val pid = aid()
                 actions += PlanAction(pid, "artwork", gid, parentId = folderId, newName = posterName, kind = "image",
                     season = n, tmdbId = show.id, note = "季海报（执行时下载）")

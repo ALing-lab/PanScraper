@@ -29,6 +29,7 @@ class Fake115Server {
     var forceErrno: Int? = null
     var forceCid: String? = null
     var instantUploadSha: String? = null // 若匹配 quickId → status 2
+    var confirmUploads = true
     var needSignCheck = false
     var signCheckDone = false
     val ossPuts: MutableList<ByteArray> = Collections.synchronizedList(mutableListOf())
@@ -77,6 +78,7 @@ class Fake115Server {
             if (path.startsWith("/oss/")) {
                 ossAuth += request.getHeader("Authorization").orEmpty()
                 ossPuts += body.toByteArray()
+                if (confirmUploads) pendingUpload?.let { (parent, name, sha) -> file((nextId++).toString(), name, parent, body.toByteArray().size.toLong(), sha) }
                 return MockResponse().setResponseCode(200).setBody("{\"Status\":\"OK\"}")
             }
 
@@ -169,6 +171,7 @@ class Fake115Server {
                     if (!cookieOk(request)) return err(99, "not login")
                     val form = parseForm(body)
                     val fileId = form["fileid"].orEmpty()
+                    pendingUpload = Triple(form["target"].orEmpty().removePrefix("U_1_"), form["filename"].orEmpty(), fileId)
                     if (needSignCheck && !signCheckDone) {
                         if (form["sign_key"].isNullOrBlank()) {
                             return MockResponse().setBody(JSONObject()
