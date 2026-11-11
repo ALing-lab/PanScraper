@@ -36,12 +36,22 @@ class V033Test {
 
     @Test fun appLicenseIsGpl3AndAllAssetsExist() {
         val app = RuntimeEnvironment.getApplication()
-        assertEquals("GNU GPL v3.0", OSS_LIBS[0].license)
+        assertEquals("GNU GPL v3.0 or later", OSS_LIBS[0].license)
         val gpl = app.assets.open("licenses/gpl-3.0-app.txt").bufferedReader().readText()
         assertTrue(gpl.startsWith("PanScraper\nCopyright (C) 2026 ALing-lab"))
         assertTrue(gpl.contains("GNU GENERAL PUBLIC LICENSE") && gpl.contains("END OF TERMS AND CONDITIONS"))
-        // 所有依赖都是 GPL-3.0 兼容许可，且全文都在
-        for (l in OSS_LIBS.drop(1)) {
+        assertTrue(gpl.contains("SPDX-License-Identifier: GPL-3.0-or-later") && gpl.contains("any later version"))
+        assertEquals("third-party-notices.txt", OSS_LIBS[1].file)
+        val inventory = org.json.JSONArray(app.assets.open("licenses/runtime-components.json").bufferedReader().readText())
+        assertEquals(91, inventory.length())
+        val modules = (0 until inventory.length()).map { inventory.getJSONObject(it) }
+        assertEquals(modules.size, modules.map { it.getString("module") }.distinct().size)
+        assertTrue(modules.all { it.getJSONArray("licenses").length() > 0 })
+        assertEquals("1.14.0", modules.single { it.getString("module") == "at.yawk.lz4:lz4-java" }.getString("version"))
+        assertEquals("1.87", modules.single { it.getString("module") == "org.bouncycastle:bcprov-jdk18on" }.getString("version"))
+        for (l in OSS_LIBS) assertTrue(l.file, app.assets.open("licenses/${l.file}").bufferedReader().readText().length > 500)
+        // 清单入口不是一个单独的第三方库；各组件仍保留原许可。
+        for (l in OSS_LIBS.drop(2)) {
             // v0.3.5 起内置字体（Mona Sans / Geist Mono / Noto Sans SC）为 SIL OFL 1.1，可与 GPL 程序一起分发
             assertTrue(l.license, l.license.startsWith("Apache License 2.0") || l.license.startsWith("MIT") || l.license.startsWith("SIL Open Font License 1.1"))
             assertTrue(l.file, app.assets.open("licenses/${l.file}").bufferedReader().readText().length > 500)

@@ -96,3 +96,5 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 所用第三方依赖（AndroidX、Jetpack Compose、Kotlin/kotlinx、OkHttp/Okio、Coil、Tink、Gson、LZ4 等为 Apache-2.0，Bouncy Castle 为 MIT）均与 GPL-3.0 兼容，各自许可见应用内「设置 → 关于 → 开源许可」。
 
 本产品使用 TMDB API，但未获得 TMDB 认可或认证。
+
+许可范围为 **GPL-3.0-or-later**（GPLv3 或后续版本），与应用内原有授权一致。项目版权见 [COPYRIGHT](COPYRIGHT)，依赖、字体及数据边界见 [第三方许可说明](THIRD_PARTY_NOTICES.md)。

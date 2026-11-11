@@ -329,10 +329,11 @@ internal fun installApk(ctx: android.content.Context, file: java.io.File) {
 data class OssLib(val name: String, val artifact: String, val license: String, val file: String, val url: String)
 
 /** 本应用自身的许可（GPL-3.0），列在最上面；依赖保留各自的许可。 */
-val APP_LICENSE = OssLib("${AppInfo.NAME}（本应用）", AppInfo.GITHUB_REPO, "GNU GPL v3.0", "gpl-3.0-app.txt", AppInfo.GITHUB_URL)
+val APP_LICENSE = OssLib("${AppInfo.NAME}（本应用）", AppInfo.GITHUB_REPO, "GNU GPL v3.0 or later", "gpl-3.0-app.txt", AppInfo.GITHUB_URL)
 
 val OSS_LIBS = listOf(
     APP_LICENSE,
+    OssLib("完整第三方组件与声明（正式发布依赖）", "releaseRuntimeClasspath · 91 个组件", "各组件原许可 / NOTICE", "third-party-notices.txt", AppInfo.GITHUB_URL),
     OssLib("Kotlin 标准库 / kotlinx.coroutines / kotlinx.serialization", "org.jetbrains.kotlin(x)", "Apache License 2.0", "apache-2.0.txt", "https://github.com/Kotlin"),
     OssLib("AndroidX Core / Activity / Lifecycle", "androidx.core, androidx.activity, androidx.lifecycle", "Apache License 2.0", "apache-2.0.txt", "https://developer.android.com/jetpack/androidx"),
     OssLib("Jetpack Compose（UI / Foundation / Animation / Material 3）", "androidx.compose.*", "Apache License 2.0", "apache-2.0.txt", "https://developer.android.com/jetpack/compose"),
@@ -359,7 +360,7 @@ val OSS_LIBS = listOf(
 @Composable
 fun LicensesScreen(nav: NavHostController) {
     LargeTitlePage("开源许可", onBack = { nav.popBackStack() }, backLabel = "关于") {
-        section("libs", footer = "${AppInfo.NAME} 以 GNU GPL v3.0 开源（Copyright (C) 2026 ${AppInfo.AUTHOR}）；所用依赖均为 Apache-2.0 / MIT 等与 GPL-3.0 兼容的许可；内置字体为 SIL OFL 1.1。点一项查看许可证全文。TMDB 数据与图片版权归 TMDB 及其贡献者所有。") {
+        section("libs", footer = "${AppInfo.NAME} 以 GNU GPL v3.0 或后续版本开源（Copyright (C) 2026 ${AppInfo.AUTHOR}）；第三方依赖保留各自许可，版本与声明见完整清单；内置字体为 SIL OFL 1.1。点一项查看许可证全文。TMDB 数据与图片版权归 TMDB 及其贡献者所有。") {
             OSS_LIBS.forEachIndexed { i, l ->
                 IosRow(l.name, subtitle = "${l.license} · ${l.artifact}", chevron = true, showDivider = i < OSS_LIBS.lastIndex) {
                     nav.navigate("settings/licenses/$i")
